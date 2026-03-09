@@ -1,0 +1,171 @@
+import asyncio
+
+class Packet:
+	def __init__(self, data, addr=1, rssi=0, snr=0):
+		self.data = data
+		self.addr = addr
+		self.rssi = rssi
+		self.snr = snr
+
+	def __str__(self):
+		return self.data
+
+class RYLR:
+	def __init__(self, uart1, uart, **kw):
+		self.uart1 = uart1
+		self.uart = uart
+		self.loop = asyncio.get_event_loop()
+		self.writer = None
+		self.reader = None
+		self._packet = None
+		self._resp = None
+		self._waiting = []
+		self._frecuency = kw.get("frequency", 902.3)
+		self._bandwidth = kw.get("bandwidth", 125000)
+		self._spreading_factor =  kw.get("spreading_factor", 7)
+		self._coding_rate = kw.get("coding_rate", 1)
+		self._preamble_length = kw.get("preamble_length", 4)
+
+	async def init(self):
+		self.reader, self.writer = await asyncio.open_connection(port=self.uart)
+		await self.set_frecuency(self.frecuency)
+		await self._selt_parameters()
+
+	async def altitud(self):
+		datos = await self.reader.readline()
+		partes = datos.decode("utf-8").strip()
+		altitud = 0
+		if partes[0] == "$GNGGA" and len(partes) >= 15:
+			altitud = partes[9]
+			longitud = partes[4]
+			latitud = partes[2]
+		if altitud != 0:
+			return str(altitud), str(longitud), str(latitud)
+		return None, None, None
+
+	async def send(self, msg, addr2=0):
+		await self._cmd('AT+SEND=%i,%i,%s' % (addr2, len(msg), msg))
+
+	async def recv_packet(self):
+		while self._packet is None:
+			await asyncio.sleep(0.1)
+		data = self._packet
+		self._packet = None
+		return data
+
+	async def recv(self):
+		pkt = await self.recv_packet()
+		return pkt.data
+
+	async def _cmd(self, x):
+		self.writer.write((x + '\r\n').encode())
+		await self.writer.drain()
+		evento = asyncio.Event()
+		self._waiting.append(evento)
+		await evento.wait()
+		return self._resp
+
+	async def ciclo(self):
+		while True:
+			try:
+				line = await self.reader.readline()
+				if not line:
+					continue
+				line = line.decode().rstrip()
+				if line.startswith('+RCV='):
+					self.recv(line[5:])
+					continue
+				self._resp = line
+				if self._waiting:
+					e = self._waiting.pop(0)
+					e.set()
+			except asyncio.CancelledError:
+				break
+			except Exception as e:
+				print(f"Error: {e}")
+				break
+
+	def _recv(self, x):
+		addr, n, x = x.split(',', 2)
+		n = init(n)
+		data = x[:n]
+		x = x[n+1:]
+		rssi, snr = x.split(',')
+		self._packet = Packet(data, int(addr), int(rssi), int(snr))
+
+	async def get_baud_rate(self):
+		x = await self._cmd('AT+IPR?')
+		return int(x[5:])
+
+	async def set_baud_rate(self, x):
+		return await self._cmd('AT+IPR=' + x)
+
+	async def  get_frecuency(self):
+		x =  await self._cmd('AT+BAND?')
+		return int(x[6:])
+
+	async def set_frecuency(self, x):
+		return await self._cmd('AT+BAND=' + str(round(x*1000000)))
+
+	async def _set_parameters(self):
+		sf = self._spreading_factor
+		bws = (7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000)
+		bw = 9
+		for i in range(len(bws)):
+			if self._bandwidth <= bws[i]:
+				bw = i
+				break
+		cr = self._coding_rate
+		pl = self._preamble_length
+		print('AT+PARAMETER=%i,%i,%i,%i' %(sf, bw, cr, pl))
+		return await self._cmd('AT+PARAMETER=%i,%i,%i,%i' %(sf, bw, cr, pl))
+
+	async def get_address(self):
+		x = await self._cmd('AT+ADDRESS?')
+		return int(x[9:])
+
+	async def set_address(self,addr):
+		return await self._cmd('AT+ADDRESS='+ str(addr))
+
+	async def get_bandwidth(self):
+		return self._bandwidth
+
+	async def set_bandwidth(self,bw):
+		self._bandwidth = bw
+		return await self._set_parameters()
+
+	async def get_coding_rate(self):
+		return self._coding_rate
+
+	async def set_coding_rate(self,cr):
+		self._coding_rate = cr
+		return await self._set_parameters()
+
+	async def get_preamble_length(self):
+		return self._preamble_length
+
+	async def set_preamble_length(self,pl):
+		self._preamble_length = pl
+		return await self._set_parameters()
+
+	async def get_spreading_factor(self):
+		return self._spreading_factor
+
+	async def set_spreading_factor(self,sf):
+		self._spreading_factor = sf
+		return await self._set_parameters()
+
+	async def get_network(self):
+		x = await self._cmd('AT+NETWORKID?')
+		return int(x[11:])
+
+	async def set_network(self,n):
+		return await self._cmd('AT+NETWORKID=' + str(n))
+
+	async def get_aes_key(self):
+		x = await self._cmd('AT+CPIN?')
+		return x[6:]
+
+	async def set_aes_key(self,key):
+		return await self._cmd('AT+CPIN='+ key)
+
