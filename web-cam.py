@@ -1,63 +1,119 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""
+Script para mostrar video de cámara USB en el framebuffer (pantalla física)
+sin necesidad de entorno gráfico X11.
+"""
 
 import cv2
+import numpy as np
+import os
 import sys
+import time
+import fcntl
+import struct
+
+# Configuración
+CAMERA_INDEX = 0  # Cambia si tu cámara es otro índice
+FRAME_WIDTH = 640  # Ancho deseado
+FRAME_HEIGHT = 480  # Alto deseado
+FB_DEVICE = "/dev/fb0"  # Dispositivo framebuffer
+FORMAT = "bgra"  # Formato de píxel para el framebuffer (común)
+
+
+def get_fb_info():
+    """
+    Obtiene la resolución y bits por píxel del framebuffer usando ioctl.
+    Retorna (ancho, alto, bits_por_pixel) o (None, None, None) si falla.
+    """
+    try:
+        fb = os.open(FB_DEVICE, os.O_RDWR)
+        # Constante FBIOGET_VSCREENINFO = 0x4600
+        # Struct fb_var_screeninfo (simplificada)
+        buf = fcntl.ioctl(fb, 0x4600, " " * 100)
+        os.close(fb)
+        # Desempaquetar los primeros campos: xres (4 bytes), yres (4 bytes), bits_per_pixel (4 bytes)
+        xres = struct.unpack("I", buf[0:4])[0]
+        yres = struct.unpack("I", buf[4:8])[0]
+        bpp = struct.unpack("I", buf[12:16])[0]
+        return xres, yres, bpp
+    except Exception as e:
+        print(f"Error obteniendo info del framebuffer: {e}")
+        return None, None, None
 
 
 def main():
-    # --- Configuración ---
-    # Índice de la cámara. Normalmente 0 es la primera cámara (USB o integrada).
-    # En algunos casos, como en Raspberry Pi o si tienes múltiples cámaras, puede ser 1, 2, etc.
-    camera_index = 0
-    # Ancho y alto deseados para la ventana (opcional, comenta si quieres la resolución por defecto)
-    frame_width = 640
-    frame_height = 480
-    # ---------------------
+    # 1. Obtener información del framebuffer
+    fb_width, fb_height, fb_bpp = get_fb_info()
+    if fb_width is None:
+        print("No se pudo determinar la resolución del framebuffer.")
+        print("Usando valores por defecto (1920x1080). Ajusta según tu monitor.")
+        fb_width, fb_height = 1920, 1080
+        fb_bpp = 32
+    else:
+        print(f"Framebuffer detectado: {fb_width}x{fb_height}, {fb_bpp} bpp")
 
-    # Inicializar la captura de video
-    print(f"[INFO] Intentando abrir la cámara con índice {camera_index}...")
-    cap = cv2.VideoCapture(camera_index)
-
-    # Verificar si la cámara se abrió correctamente
+    # 2. Abrir cámara
+    cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
-        print(f"[ERROR] No se pudo abrir la cámara con índice {camera_index}.")
-        print(
-            "[INFO] Prueba cambiando el 'camera_index' en el script (a 1, 2, etc.) o verifica la conexión de la cámara."
-        )
+        print(f"Error: No se puede abrir la cámara con índice {CAMERA_INDEX}")
+        print("Prueba con otro índice (1, 2, ...) o verifica la conexión.")
         sys.exit(1)
 
-    # Configurar la resolución (opcional)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
-    print(
-        f"[INFO] Cámara abierta. Resolución configurada a {frame_width}x{frame_height}."
-    )
+    # Configurar resolución de captura
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
-    print("[INFO] Mostrando video. Presiona 'q' en la ventana para salir.")
+    # 3. Abrir framebuffer para escritura
+    try:
+        fb = os.open(FB_DEVICE, os.O_RDWR)
+    except Exception as e:
+        print(f"Error abriendo {FB_DEVICE}: {e}")
+        print("Asegúrate de tener permisos (ejecuta con sudo).")
+        sys.exit(1)
 
-    while True:
-        # Capturar frame por frame
-        ret, frame = cap.read()
+    print("Mostrando video en framebuffer. Presiona Ctrl+C para salir.")
 
-        # Si el frame se capturó correctamente, 'ret' será True
-        if not ret:
-            print("[ERROR] No se pudo recibir el frame. Saliendo...")
-            break
+    try:
+        while True:
+            # Capturar frame
+            ret, frame = cap.read()
+            if not ret:
+                print("Error leyendo frame de la cámara")
+                break
 
-        # Mostrar el frame en una ventana
-        cv2.imshow("Video en Tiempo Real - Presiona q para salir", frame)
+            # Redimensionar al tamaño del framebuffer
+            # (Si quieres mantener proporción, puedes hacer un resize ajustado)
+            frame_resized = cv2.resize(frame, (fb_width, fb_height))
 
-        # Salir del bucle si se presiona la tecla 'q'
-        # cv2.waitKey(1) espera 1 ms por una tecla. El & 0xFF es necesario para sistemas de 64 bits.
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            print("[INFO] Tecla 'q' presionada. Saliendo...")
-            break
+            # Convertir al formato esperado por el framebuffer
+            # OpenCV por defecto usa BGR, necesitamos BGRA (32 bits) que suele ser compatible
+            # Si fb_bpp es 16, habría que convertir a rgb565, pero por el error sabemos que no es soportado.
+            # Asumimos 32 bits.
+            if fb_bpp == 32:
+                frame_fb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2BGRA)
+            elif fb_bpp == 16:
+                # Intentar convertir a BGR565 (poco común, pero por si acaso)
+                frame_fb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2BGR565)
+            else:
+                print(f"Bits por píxel {fb_bpp} no soportado. Usando BGRA.")
+                frame_fb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2BGRA)
 
-    # Liberar la cámara y cerrar todas las ventanas
-    cap.release()
-    cv2.destroyAllWindows()
-    print("[INFO] Programa terminado.")
+            # Escribir en el framebuffer (empezando desde el inicio)
+            os.lseek(fb, 0, os.SEEK_SET)
+            os.write(fb, frame_fb.tobytes())
+
+            # Pequeña pausa para controlar FPS (ajusta según necesites)
+            time.sleep(0.03)  # ~30 FPS
+
+    except KeyboardInterrupt:
+        print("\nDetenido por el usuario.")
+    except Exception as e:
+        print(f"Error durante la reproducción: {e}")
+    finally:
+        # Liberar recursos
+        cap.release()
+        os.close(fb)
+        print("Recursos liberados.")
 
 
 if __name__ == "__main__":
