@@ -1,8 +1,16 @@
 # Resultados de pruebas de streaming
 
 Anota aquí las métricas obtenidas al probar cada configuración.
-Ejecuta el servidor con `python pruebas.py --width W --height H --fps F --jpeg J`
-y observa los logs cada 10 segundos.
+
+## Inicio rápido (menú)
+
+```bash
+python menu.py
+# o
+python pruebas.py
+```
+
+Menú: Normal, Alcance largo, Red inestable, Recursos dinámicos, UDP, HTTPS.
 
 | Resolución | FPS | Calidad JPEG | FPS real (medido) | CPU % | Ancho de banda (aprox) | Latencia percibida |
 |------------|-----|--------------|-------------------|-------|------------------------|--------------------|
@@ -68,3 +76,14 @@ UNSTABLE_NETWORK_MODE=1 FRAME_BUFFER_SIZE=8 python web-cam.py
 ```
 
 El cliente detecta desconexión (3 fallos consecutivos en `/stats`) y recarga el stream automáticamente.
+
+## UDP
+
+Envío de video por UDP (integrado en web-cam.py):
+
+```bash
+python web-cam.py --udp
+python web-cam.py --udp --udp-ip 192.168.1.50 --udp-port 5005
+```
+
+Variables: `UDP_ENABLED=1`, `UDP_TARGET_IP`, `UDP_TARGET_PORT`.

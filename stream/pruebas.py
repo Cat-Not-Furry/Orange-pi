@@ -83,12 +83,11 @@ def main():
 			print(f"     {cmd}\n")
 		return 0
 
-	# --long-range ignora width/height/fps/jpeg
-	if not args.long_range and (args.width is None or args.height is None or args.fps is None or args.jpeg is None):
-		print("Usa --listar para ver configuraciones sugeridas.")
-		print("Ejemplo: python pruebas.py --width 640 --height 360 --fps 20 --jpeg 60")
-		print("O: python pruebas.py --long-range")
-		return 1
+	# Sin argumentos: menú interactivo
+	tiene_params = args.long_range or (args.width is not None and args.height is not None and args.fps is not None and args.jpeg is not None)
+	if not args.listar and not tiene_params:
+		menu_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "menu.py")
+		return subprocess.run([sys.executable, menu_path]).returncode
 
 	if args.long_range:
 		width, height, fps, jpeg = 640, 360, 15, 60

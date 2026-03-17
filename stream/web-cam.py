@@ -5,6 +5,23 @@ Servidor de streaming con soporte para múltiples cámaras (/dev/video0, video1,
 
 import os
 import sys
+import socket
+import struct
+
+# Parsear --udp, --udp-ip, --udp-port antes de leer config
+if __name__ == "__main__":
+	import argparse
+	_parser = argparse.ArgumentParser()
+	_parser.add_argument("--udp", action="store_true", help="Activar envío UDP")
+	_parser.add_argument("--udp-ip", type=str, help="IP destino UDP")
+	_parser.add_argument("--udp-port", type=int, help="Puerto destino UDP")
+	_args, _ = _parser.parse_known_args()
+	if _args.udp:
+		os.environ.setdefault("UDP_ENABLED", "1")
+	if _args.udp_ip:
+		os.environ["UDP_TARGET_IP"] = _args.udp_ip
+	if _args.udp_port:
+		os.environ["UDP_TARGET_PORT"] = str(_args.udp_port)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cv2
@@ -15,6 +32,10 @@ import psutil
 import json
 from collections import deque
 from flask import Flask, Response, render_template_string
+
+# UDP: fragmentación (frame_id 4B + chunk_idx 2B + total 2B + payload)
+_UDP_CHUNK_MAX = 1400
+_UDP_HEADER_SIZE = 8
 
 # Configuración de logging
 logging.basicConfig(
@@ -102,6 +123,43 @@ def _get_current_fps():
 def _get_current_jpeg_quality():
 	"""Calidad JPEG efectiva (dinámica o fija)."""
 	return dynamic_params["jpeg_quality"] if DYNAMIC_RESOURCES and resource_limiter else JPEG_QUALITY
+
+
+def _udp_fragment_and_send(sock, target: tuple, frame_bytes: bytes, frame_id: int) -> int:
+	"""Fragmenta y envía un frame por UDP."""
+	payload_size = _UDP_CHUNK_MAX - _UDP_HEADER_SIZE
+	total = (len(frame_bytes) + payload_size - 1) // payload_size
+	sent = 0
+	for idx in range(total):
+		offset = idx * payload_size
+		chunk_data = frame_bytes[offset : offset + payload_size]
+		header = struct.pack(">IHH", frame_id, idx, total)
+		try:
+			sock.sendto(header + chunk_data, target)
+			sent += len(header) + len(chunk_data)
+		except OSError as e:
+			logger.warning(f"UDP send: {e}")
+			break
+	return sent
+
+
+def _udp_send_loop(frame_getter, target_ip: str, target_port: int, fps: float) -> None:
+	"""Hilo que envía frames por UDP."""
+	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	target = (target_ip, target_port)
+	frame_id = 0
+	interval = 1.0 / fps if fps > 0 else 0.033
+	next_send = time.perf_counter()
+	while True:
+		frame_bytes = frame_getter()
+		if frame_bytes:
+			_udp_fragment_and_send(sock, target, frame_bytes, frame_id)
+			frame_id = (frame_id + 1) & 0xFFFFFFFF
+		next_send += interval
+		now = time.perf_counter()
+		if next_send < now:
+			next_send = now + interval
+		time.sleep(max(0, next_send - now))
 
 
 def _process_frame(frame):
@@ -348,97 +406,83 @@ def index():
 
 
 if __name__ == "__main__":
-    logger.info("Iniciando servidor de streaming...")
+	logger.info("Iniciando servidor de streaming...")
 
-    # Verificar dependencias
-    try:
-        import psutil
-    except ImportError:
-        logger.error("psutil no instalado. Ejecuta: pip install psutil")
-        exit(1)
+	try:
+		import psutil
+	except ImportError:
+		logger.error("psutil no instalado. Ejecuta: pip install psutil")
+		exit(1)
 
-    # Buscar cámara disponible
-    cam_idx = find_camera()
-    if cam_idx is None:
-        logger.error("No se pudo encontrar ninguna cámara. Abortando.")
-        exit(1)
+	cam_idx = find_camera()
+	if cam_idx is None:
+		logger.error("No se pudo encontrar ninguna cámara. Abortando.")
+		exit(1)
 
-    # Inicializar cámara encontrada
-    if not init_camera(cam_idx):
-        logger.error("No se pudo inicializar la cámara")
-        exit(1)
+	if not init_camera(cam_idx):
+		logger.error("No se pudo inicializar la cámara")
+		exit(1)
 
-    # Inicializar buffer y thread de captura si está habilitado (o si UDP requiere buffer)
-    if FRAME_BUFFER_SIZE > 0 or UDP_ENABLED:
-        if FRAME_BUFFER_SIZE <= 0 and UDP_ENABLED:
-            frame_buffer = FrameBuffer(maxlen=5)
-            logger.info("Buffer activo para UDP (5 frames)")
-        else:
-            frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
-        camera_thread = threading.Thread(target=_camera_capture_loop, daemon=True)
-        camera_thread.start()
-        buf_size = FRAME_BUFFER_SIZE if FRAME_BUFFER_SIZE > 0 else 5
-        logger.info(f"Buffer de frames activo: {buf_size} frames")
+	if FRAME_BUFFER_SIZE > 0 or UDP_ENABLED:
+		if FRAME_BUFFER_SIZE <= 0 and UDP_ENABLED:
+			frame_buffer = FrameBuffer(maxlen=5)
+			logger.info("Buffer activo para UDP (5 frames)")
+		else:
+			frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
+		camera_thread = threading.Thread(target=_camera_capture_loop, daemon=True)
+		camera_thread.start()
+		buf_size = FRAME_BUFFER_SIZE if FRAME_BUFFER_SIZE > 0 else 5
+		logger.info(f"Buffer de frames activo: {buf_size} frames")
 
-    # Recursos dinámicos (adaptan FPS y JPEG_QUALITY; resolución fija en init)
-    if DYNAMIC_RESOURCES:
-        try:
-            from resource_limiter import ResourceLimiter
-        except ImportError:
-            from stream.resource_limiter import ResourceLimiter
-        resource_limiter = ResourceLimiter(
-            cpu_target=float(os.environ.get("CPU_TARGET_PCT", 70)),
-            ram_target=float(os.environ.get("RAM_TARGET_PCT", 70)),
-            target_fps=int(os.environ.get("TARGET_FPS", 60)),
-        )
-        dynamic_params.update(resource_limiter.get_recommended_params())
+	if DYNAMIC_RESOURCES:
+		try:
+			from resource_limiter import ResourceLimiter
+		except ImportError:
+			from stream.resource_limiter import ResourceLimiter
+		resource_limiter = ResourceLimiter(
+			cpu_target=float(os.environ.get("CPU_TARGET_PCT", 70)),
+			ram_target=float(os.environ.get("RAM_TARGET_PCT", 70)),
+			target_fps=int(os.environ.get("TARGET_FPS", 60)),
+		)
+		dynamic_params.update(resource_limiter.get_recommended_params())
 
-        def _on_params_updated(params):
-            dynamic_params.update(params)
+		def _on_params_updated(params):
+			dynamic_params.update(params)
 
-        resource_limiter.start_adaptation_loop(_on_params_updated)
-        logger.info("Modo dinámico de recursos activo")
+		resource_limiter.start_adaptation_loop(_on_params_updated)
+		logger.info("Modo dinámico de recursos activo")
 
-    # UDP
-    if UDP_ENABLED and frame_buffer:
-        try:
-            from udp_sender import udp_send_loop
-        except ImportError:
-            from stream.udp_sender import udp_send_loop
+	if UDP_ENABLED and frame_buffer:
+		def _udp_frame_getter():
+			return frame_buffer.get_latest() if frame_buffer else None
 
-        def _udp_frame_getter():
-            return frame_buffer.get_latest() if frame_buffer else None
+		udp_fps = _get_current_fps() if (DYNAMIC_RESOURCES and resource_limiter) else FPS
+		udp_thread = threading.Thread(
+			target=_udp_send_loop,
+			args=(_udp_frame_getter, UDP_TARGET_IP, UDP_TARGET_PORT, udp_fps),
+			daemon=True,
+		)
+		udp_thread.start()
+		logger.info(f"UDP activo: {UDP_TARGET_IP}:{UDP_TARGET_PORT}")
 
-        udp_fps = _get_current_fps() if (DYNAMIC_RESOURCES and resource_limiter) else FPS
-        udp_thread = threading.Thread(
-            target=udp_send_loop,
-            args=(_udp_frame_getter, UDP_TARGET_IP, UDP_TARGET_PORT, udp_fps),
-            daemon=True,
-        )
-        udp_thread.start()
-        logger.info(f"UDP activo: {UDP_TARGET_IP}:{UDP_TARGET_PORT}")
+	monitor_thread = threading.Thread(target=monitor_system, daemon=True)
+	monitor_thread.start()
 
-    # Iniciar monitor de sistema en segundo plano
-    monitor_thread = threading.Thread(target=monitor_system, daemon=True)
-    monitor_thread.start()
+	ssl_context = None
+	if SSL_ADHOC:
+		ssl_context = "adhoc"
+		logger.info("HTTPS activo (certificado adhoc, solo desarrollo)")
+	elif SSL_CRT_FILE and SSL_KEY_FILE and os.path.isfile(SSL_CRT_FILE) and os.path.isfile(SSL_KEY_FILE):
+		ssl_context = (SSL_CRT_FILE, SSL_KEY_FILE)
+		logger.info(f"HTTPS activo con certificados: {SSL_CRT_FILE}")
+	elif SSL_CRT_FILE or SSL_KEY_FILE:
+		logger.warning("SSL_CRT_FILE/SSL_KEY_FILE definidos pero archivos no encontrados. Usando HTTP.")
 
-    # Construir ssl_context si hay certificados
-    ssl_context = None
-    if SSL_ADHOC:
-        ssl_context = "adhoc"
-        logger.info("HTTPS activo (certificado adhoc, solo desarrollo)")
-    elif SSL_CRT_FILE and SSL_KEY_FILE and os.path.isfile(SSL_CRT_FILE) and os.path.isfile(SSL_KEY_FILE):
-        ssl_context = (SSL_CRT_FILE, SSL_KEY_FILE)
-        logger.info(f"HTTPS activo con certificados: {SSL_CRT_FILE}")
-    elif SSL_CRT_FILE or SSL_KEY_FILE:
-        logger.warning("SSL_CRT_FILE/SSL_KEY_FILE definidos pero archivos no encontrados. Usando HTTP.")
-
-    # Ejecutar servidor
-    try:
-        app.run(host="0.0.0.0", port=HTTPS_PORT, debug=False, threaded=True, ssl_context=ssl_context)
-    except KeyboardInterrupt:
-        logger.info("Servidor detenido por el usuario")
-    finally:
-        if camera:
-            camera.release()
-        logger.info("Recursos liberados")
+	try:
+		app.run(host="0.0.0.0", port=HTTPS_PORT, debug=False, threaded=True, ssl_context=ssl_context)
+	except KeyboardInterrupt:
+		logger.info("Servidor detenido por el usuario")
+	finally:
+		if camera:
+			camera.release()
+		logger.info("Recursos liberados")
