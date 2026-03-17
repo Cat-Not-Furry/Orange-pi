@@ -1,0 +1,50 @@
+# Entorno virtual
+venv/
+venv_*/
+.env/
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Archivos de log
+*.log
+*.log.*
+logs/
+
+# Archivos de video/imagen generados
+*.mp4
+*.avi
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webm
+output*.avi
+captura*.jpg
+wenv/
+# IDs de editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración local
+*.local
+*.env.local
+
+# Archivos de pruebas temporales
+test_*.py
+temp_*
