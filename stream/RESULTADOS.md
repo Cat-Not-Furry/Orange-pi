@@ -10,7 +10,7 @@ python menu.py
 python pruebas.py
 ```
 
-Menú: Normal, Alcance largo, Red inestable, Recursos dinámicos, UDP, HTTPS.
+Menú: Normal, Alcance largo, Red inestable, Recursos dinámicos, UDP, HTTPS, Grabar video (alta calidad).
 
 | Resolución | FPS | Calidad JPEG | FPS real (medido) | CPU % | Ancho de banda (aprox) | Latencia percibida |
 |------------|-----|--------------|-------------------|-------|------------------------|--------------------|
@@ -87,3 +87,20 @@ python web-cam.py --udp --udp-ip 192.168.1.50 --udp-port 5005
 ```
 
 Variables: `UDP_ENABLED=1`, `UDP_TARGET_IP`, `UDP_TARGET_PORT`.
+
+El socket UDP usa buffer de salida ampliado (256 KB) para reducir pérdida en redes de largo alcance.
+
+## Grabación en alta calidad
+
+Grabar video local en máxima resolución (1920x1080 por defecto):
+
+```bash
+python web-cam.py --record
+python web-cam.py --record --record-dir /ruta/destino
+```
+
+O desde menú: opción "Grabar video (alta calidad, máxima resolución)".
+
+Variables: `RECORD_ENABLED=1`, `RECORD_WIDTH`, `RECORD_HEIGHT`, `RECORD_OUTPUT_DIR`.
+
+Los archivos se guardan en `./recordings/recording_YYYYMMDD_HHMMSS.mp4` (o .avi si solo MJPEG está disponible).

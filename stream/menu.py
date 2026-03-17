@@ -36,6 +36,19 @@ MODOS = [
 		"nombre": "HTTPS (certificado adhoc)",
 		"env": {"SSL_ADHOC": "1", "FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "30", "JPEG_QUALITY": "80"},
 	},
+	{
+		"nombre": "Grabar video (alta calidad, máxima resolución)",
+		"env": {
+			"RECORD_ENABLED": "1",
+			"RECORD_WIDTH": "1920",
+			"RECORD_HEIGHT": "1080",
+			"RECORD_OUTPUT_DIR": "./recordings",
+			"FRAME_WIDTH": "1920",
+			"FRAME_HEIGHT": "1080",
+			"FPS": "30",
+			"JPEG_QUALITY": "90",
+		},
+	},
 ]
 
 

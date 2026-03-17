@@ -26,6 +26,7 @@ def ejecutar_servidor(
 	crt_file: str = "", key_file: str = "",
 	unstable: bool = False, cpu_intensive: bool = False, long_range: bool = False,
 	dynamic: bool = False, udp: bool = False,
+	record: bool = False, record_dir: str = "",
 ) -> int:
 	"""Lanza el servidor con la configuración indicada."""
 	env = os.environ.copy()
@@ -44,6 +45,15 @@ def ejecutar_servidor(
 		env["DYNAMIC_RESOURCES"] = "1"
 	if udp:
 		env["UDP_ENABLED"] = "1"
+	if record:
+		env["RECORD_ENABLED"] = "1"
+		env["RECORD_WIDTH"] = "1920"
+		env["RECORD_HEIGHT"] = "1080"
+		env["FRAME_WIDTH"] = "1920"
+		env["FRAME_HEIGHT"] = "1080"
+		env["JPEG_QUALITY"] = "90"
+		if record_dir:
+			env["RECORD_OUTPUT_DIR"] = record_dir
 	if https:
 		if crt_file and key_file:
 			env["SSL_CRT_FILE"] = crt_file
@@ -70,6 +80,8 @@ def main():
 	parser.add_argument("--long-range", action="store_true", help="Modo alcance largo 80m (640x360, 15fps)")
 	parser.add_argument("--dynamic", action="store_true", help="Recursos dinámicos (CPU/RAM target 70%%)")
 	parser.add_argument("--udp", action="store_true", help="Transmisión UDP del video")
+	parser.add_argument("--record", action="store_true", help="Grabar video en alta calidad y máxima resolución")
+	parser.add_argument("--record-dir", type=str, help="Directorio de salida para grabaciones")
 	args = parser.parse_args()
 
 	if args.listar:
@@ -84,13 +96,18 @@ def main():
 		return 0
 
 	# Sin argumentos: menú interactivo
-	tiene_params = args.long_range or (args.width is not None and args.height is not None and args.fps is not None and args.jpeg is not None)
+	tiene_params = (
+		args.long_range or args.record
+		or (args.width is not None and args.height is not None and args.fps is not None and args.jpeg is not None)
+	)
 	if not args.listar and not tiene_params:
 		menu_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "menu.py")
 		return subprocess.run([sys.executable, menu_path]).returncode
 
 	if args.long_range:
 		width, height, fps, jpeg = 640, 360, 15, 60
+	elif args.record:
+		width, height, fps, jpeg = 1920, 1080, 30, 90
 	else:
 		width, height, fps, jpeg = args.width, args.height, args.fps, args.jpeg
 
@@ -115,6 +132,8 @@ def main():
 		modos.append("recursos dinámicos")
 	if args.udp:
 		modos.append("UDP")
+	if args.record:
+		modos.append("grabación alta calidad")
 
 	modo_str = ", ".join(modos) if modos else "HTTP"
 	print(f"Ejecutando: {width}x{height} @ {fps}fps, JPEG {jpeg}% ({modo_str})")
@@ -123,6 +142,7 @@ def main():
 		width, height, fps, jpeg, https, crt_file, key_file,
 		args.unstable, args.cpu_intensive, args.long_range,
 		args.dynamic, args.udp,
+		args.record, args.record_dir or "",
 	)
 
 
