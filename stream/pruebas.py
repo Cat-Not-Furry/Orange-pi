@@ -25,6 +25,7 @@ def ejecutar_servidor(
 	width: int, height: int, fps: int, jpeg: int, https: bool = False,
 	crt_file: str = "", key_file: str = "",
 	unstable: bool = False, cpu_intensive: bool = False, long_range: bool = False,
+	dynamic: bool = False, udp: bool = False,
 ) -> int:
 	"""Lanza el servidor con la configuración indicada."""
 	env = os.environ.copy()
@@ -39,6 +40,10 @@ def ejecutar_servidor(
 		env["CPU_INTENSIVE_MODE"] = "1"
 	if long_range:
 		env["LONG_RANGE_MODE"] = "1"
+	if dynamic:
+		env["DYNAMIC_RESOURCES"] = "1"
+	if udp:
+		env["UDP_ENABLED"] = "1"
 	if https:
 		if crt_file and key_file:
 			env["SSL_CRT_FILE"] = crt_file
@@ -63,6 +68,8 @@ def main():
 	parser.add_argument("--unstable", action="store_true", help="Modo red inestable (buffer + menor calidad)")
 	parser.add_argument("--cpu-intensive", action="store_true", help="Modo CPU intensivo (más procesamiento)")
 	parser.add_argument("--long-range", action="store_true", help="Modo alcance largo 80m (640x360, 15fps)")
+	parser.add_argument("--dynamic", action="store_true", help="Recursos dinámicos (CPU/RAM target 70%%)")
+	parser.add_argument("--udp", action="store_true", help="Transmisión UDP del video")
 	args = parser.parse_args()
 
 	if args.listar:
@@ -105,6 +112,10 @@ def main():
 		modos.append("CPU intensivo")
 	if args.long_range:
 		modos.append("alcance largo")
+	if args.dynamic:
+		modos.append("recursos dinámicos")
+	if args.udp:
+		modos.append("UDP")
 
 	modo_str = ", ".join(modos) if modos else "HTTP"
 	print(f"Ejecutando: {width}x{height} @ {fps}fps, JPEG {jpeg}% ({modo_str})")
@@ -112,6 +123,7 @@ def main():
 	return ejecutar_servidor(
 		width, height, fps, jpeg, https, crt_file, key_file,
 		args.unstable, args.cpu_intensive, args.long_range,
+		args.dynamic, args.udp,
 	)
 
 

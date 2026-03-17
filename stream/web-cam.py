@@ -4,6 +4,9 @@ Servidor de streaming con soporte para múltiples cámaras (/dev/video0, video1,
 """
 
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cv2
 import logging
 import threading
@@ -41,6 +44,11 @@ FRAME_BUFFER_SIZE = int(os.environ.get("FRAME_BUFFER_SIZE", 0))  # 0 = desactiva
 UNSTABLE_NETWORK_MODE = os.environ.get("UNSTABLE_NETWORK_MODE", "0") == "1"
 LONG_RANGE_MODE = os.environ.get("LONG_RANGE_MODE", "0") == "1"
 CPU_INTENSIVE_MODE = os.environ.get("CPU_INTENSIVE_MODE", "0") == "1"
+# Recursos dinámicos y UDP
+DYNAMIC_RESOURCES = os.environ.get("DYNAMIC_RESOURCES", "0") == "1"
+UDP_ENABLED = os.environ.get("UDP_ENABLED", "0") == "1"
+UDP_TARGET_IP = os.environ.get("UDP_TARGET_IP", "127.0.0.1")
+UDP_TARGET_PORT = int(os.environ.get("UDP_TARGET_PORT", 5005))
 # ===================================
 
 # Aplicar overrides de modo (después de leer variables base)
@@ -65,6 +73,8 @@ bytes_sent = 0
 start_time = time.time()
 stats = {"fps": 0, "cpu": 0, "mem": 0, "uptime": 0, "camera": "Ninguna", "bandwidth_mbps": 0}
 frame_buffer = None
+resource_limiter = None
+dynamic_params = {"fps": FPS, "jpeg_quality": JPEG_QUALITY, "width": FRAME_WIDTH, "height": FRAME_HEIGHT}
 
 
 class FrameBuffer:
@@ -84,6 +94,16 @@ class FrameBuffer:
 			return self._deque[-1] if self._deque else None
 
 
+def _get_current_fps():
+	"""FPS efectivo (dinámico o fijo)."""
+	return dynamic_params["fps"] if DYNAMIC_RESOURCES and resource_limiter else FPS
+
+
+def _get_current_jpeg_quality():
+	"""Calidad JPEG efectiva (dinámica o fija)."""
+	return dynamic_params["jpeg_quality"] if DYNAMIC_RESOURCES and resource_limiter else JPEG_QUALITY
+
+
 def _process_frame(frame):
 	"""Aplica procesamiento opcional para aumentar CPU."""
 	if CPU_INTENSIVE_MODE:
@@ -96,7 +116,7 @@ def _process_frame(frame):
 def _camera_capture_loop():
 	"""Hilo que captura frames y los pone en el buffer."""
 	global frame_count, frame_buffer
-	encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+	next_frame_time = time.perf_counter()
 	while camera and camera.isOpened():
 		success, frame = camera.read()
 		if not success:
@@ -104,10 +124,18 @@ def _camera_capture_loop():
 			continue
 		frame_count += 1
 		frame = _process_frame(frame)
+		jpeg_q = _get_current_jpeg_quality()
+		encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_q]
 		ret, buffer = cv2.imencode(".jpg", frame, encode_param)
 		if ret and frame_buffer:
 			frame_buffer.put(buffer.tobytes())
-		time.sleep(1 / FPS)
+		fps = _get_current_fps()
+		interval = 1.0 / fps if fps > 0 else 0.033
+		next_frame_time += interval
+		now = time.perf_counter()
+		if next_frame_time < now:
+			next_frame_time = now + interval
+		time.sleep(max(0, next_frame_time - now))
 
 
 def find_camera():
@@ -198,17 +226,24 @@ def generate_frames():
 		logger.error("Cámara no disponible")
 		return
 
-	encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+	next_frame_time = time.perf_counter()
 
 	if frame_buffer:
 		# Modo buffer: leer desde buffer
 		while True:
 			frame_bytes = frame_buffer.get_latest()
 			if frame_bytes:
-				chunk = _make_mjpeg_chunk(frame_bytes)
-				bytes_sent += len(chunk)
-				yield chunk
-			time.sleep(1 / FPS)
+				now = time.perf_counter()
+				if now >= next_frame_time:
+					chunk = _make_mjpeg_chunk(frame_bytes)
+					bytes_sent += len(chunk)
+					yield chunk
+					fps = _get_current_fps()
+					interval = 1.0 / fps if fps > 0 else 0.033
+					next_frame_time += interval
+					if next_frame_time < now:
+						next_frame_time = now + interval
+			time.sleep(0.001)
 	else:
 		# Modo directo: leer de cámara
 		while True:
@@ -218,12 +253,21 @@ def generate_frames():
 				break
 			frame_count += 1
 			frame = _process_frame(frame)
+			jpeg_q = _get_current_jpeg_quality()
+			encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_q]
 			ret, buffer = cv2.imencode(".jpg", frame, encode_param)
 			frame_bytes = buffer.tobytes()
-			chunk = _make_mjpeg_chunk(frame_bytes)
-			bytes_sent += len(chunk)
-			yield chunk
-			time.sleep(1 / FPS)
+			now = time.perf_counter()
+			if now >= next_frame_time:
+				chunk = _make_mjpeg_chunk(frame_bytes)
+				bytes_sent += len(chunk)
+				yield chunk
+				fps = _get_current_fps()
+				interval = 1.0 / fps if fps > 0 else 0.033
+				next_frame_time += interval
+				if next_frame_time < now:
+					next_frame_time = now + interval
+			time.sleep(max(0, next_frame_time - time.perf_counter()))
 
 
 @app.route("/video_feed")
@@ -324,12 +368,55 @@ if __name__ == "__main__":
         logger.error("No se pudo inicializar la cámara")
         exit(1)
 
-    # Inicializar buffer y thread de captura si está habilitado
-    if FRAME_BUFFER_SIZE > 0:
-        frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
+    # Inicializar buffer y thread de captura si está habilitado (o si UDP requiere buffer)
+    if FRAME_BUFFER_SIZE > 0 or UDP_ENABLED:
+        if FRAME_BUFFER_SIZE <= 0 and UDP_ENABLED:
+            frame_buffer = FrameBuffer(maxlen=5)
+            logger.info("Buffer activo para UDP (5 frames)")
+        else:
+            frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
         camera_thread = threading.Thread(target=_camera_capture_loop, daemon=True)
         camera_thread.start()
-        logger.info(f"Buffer de frames activo: {FRAME_BUFFER_SIZE} frames")
+        buf_size = FRAME_BUFFER_SIZE if FRAME_BUFFER_SIZE > 0 else 5
+        logger.info(f"Buffer de frames activo: {buf_size} frames")
+
+    # Recursos dinámicos (adaptan FPS y JPEG_QUALITY; resolución fija en init)
+    if DYNAMIC_RESOURCES:
+        try:
+            from resource_limiter import ResourceLimiter
+        except ImportError:
+            from stream.resource_limiter import ResourceLimiter
+        resource_limiter = ResourceLimiter(
+            cpu_target=float(os.environ.get("CPU_TARGET_PCT", 70)),
+            ram_target=float(os.environ.get("RAM_TARGET_PCT", 70)),
+            target_fps=int(os.environ.get("TARGET_FPS", 60)),
+        )
+        dynamic_params.update(resource_limiter.get_recommended_params())
+
+        def _on_params_updated(params):
+            dynamic_params.update(params)
+
+        resource_limiter.start_adaptation_loop(_on_params_updated)
+        logger.info("Modo dinámico de recursos activo")
+
+    # UDP
+    if UDP_ENABLED and frame_buffer:
+        try:
+            from udp_sender import udp_send_loop
+        except ImportError:
+            from stream.udp_sender import udp_send_loop
+
+        def _udp_frame_getter():
+            return frame_buffer.get_latest() if frame_buffer else None
+
+        udp_fps = _get_current_fps() if (DYNAMIC_RESOURCES and resource_limiter) else FPS
+        udp_thread = threading.Thread(
+            target=udp_send_loop,
+            args=(_udp_frame_getter, UDP_TARGET_IP, UDP_TARGET_PORT, udp_fps),
+            daemon=True,
+        )
+        udp_thread.start()
+        logger.info(f"UDP activo: {UDP_TARGET_IP}:{UDP_TARGET_PORT}")
 
     # Iniciar monitor de sistema en segundo plano
     monitor_thread = threading.Thread(target=monitor_system, daemon=True)
