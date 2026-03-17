@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configuración de la cámara
-CAMERA_INDEX = 0
+CAMERA_INDEX = 2
 FRAME_WIDTH = 1280  # HD
 FRAME_HEIGHT = 720  # 720p
 FPS = 30
