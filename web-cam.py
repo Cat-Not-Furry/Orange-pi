@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Servidor de streaming con logging y optimizaciones para red WiFi
+Servidor de streaming con soporte para múltiples cámaras (/dev/video0, video1, ...)
 """
 
 import cv2
@@ -22,24 +22,44 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Configuración de la cámara
-CAMERA_INDEX = 2
+# Configuración de la cámara - Lista de posibles índices a probar
+CAMERA_INDICES = [0, 1, 2]  # /dev/video0, video1, video2
 FRAME_WIDTH = 1280  # HD
 FRAME_HEIGHT = 720  # 720p
 FPS = 30
-BITRATE = 2000  # kbps (ajusta según tu red)
+BITRATE = 2000  # kbps (reservado para futuros ajustes)
 
 # Variables globales
 camera = None
+camera_index = None
 frame_count = 0
 start_time = time.time()
-stats = {"fps": 0, "cpu": 0, "mem": 0, "uptime": 0}
+stats = {"fps": 0, "cpu": 0, "mem": 0, "uptime": 0, "camera": "Ninguna"}
 
 
-def init_camera():
+def find_camera():
+    """Prueba varios índices hasta encontrar una cámara accesible"""
+    for idx in CAMERA_INDICES:
+        logger.info(f"Probando cámara con índice {idx} (/dev/video{idx})...")
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            # Verificar que realmente puede leer un frame
+            ret, _ = cap.read()
+            if ret:
+                logger.info(f"✅ Cámara encontrada en /dev/video{idx}")
+                cap.release()
+                return idx
+            else:
+                logger.warning(f"Índice {idx} se abrió pero no entrega frames")
+        cap.release()
+    logger.error("❌ No se encontró ninguna cámara en los índices probados")
+    return None
+
+
+def init_camera(index):
     """Inicializa la cámara con configuración óptima"""
     global camera
-    camera = cv2.VideoCapture(CAMERA_INDEX)
+    camera = cv2.VideoCapture(index)
 
     # Intentar configurar con códec MJPEG si es posible (menor CPU)
     camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -54,7 +74,7 @@ def init_camera():
     actual_fps = camera.get(cv2.CAP_PROP_FPS)
 
     logger.info(
-        f"Cámara inicializada: {actual_width}x{actual_height} @ {actual_fps}fps"
+        f"Cámara /dev/video{index} inicializada: {actual_width}x{actual_height} @ {actual_fps}fps"
     )
 
     if actual_width != FRAME_WIDTH:
@@ -62,6 +82,7 @@ def init_camera():
             f"Resolución solicitada {FRAME_WIDTH}x{FRAME_HEIGHT} no soportada, usando {actual_width}x{actual_height}"
         )
 
+    stats["camera"] = f"/dev/video{index}"
     return camera.isOpened()
 
 
@@ -121,7 +142,8 @@ def get_stats():
 
 @app.route("/")
 def index():
-    return render_template_string("""
+    return render_template_string(
+        """
     <!DOCTYPE html>
     <html>
     <head>
@@ -140,6 +162,7 @@ def index():
         
         <div id="stats">
             <h3>Estadísticas</h3>
+            <p>Cámara: <span id="cam">{{ stats.camera }}</span></p>
             <p>FPS: <span id="fps">0</span></p>
             <p>CPU: <span id="cpu">0</span>%</p>
             <p>Memoria: <span id="mem">0</span>%</p>
@@ -161,7 +184,9 @@ def index():
         </script>
     </body>
     </html>
-    """)
+    """,
+        stats=stats,
+    )
 
 
 if __name__ == "__main__":
@@ -174,8 +199,14 @@ if __name__ == "__main__":
         logger.error("psutil no instalado. Ejecuta: pip install psutil")
         exit(1)
 
-    # Inicializar cámara
-    if not init_camera():
+    # Buscar cámara disponible
+    cam_idx = find_camera()
+    if cam_idx is None:
+        logger.error("No se pudo encontrar ninguna cámara. Abortando.")
+        exit(1)
+
+    # Inicializar cámara encontrada
+    if not init_camera(cam_idx):
         logger.error("No se pudo inicializar la cámara")
         exit(1)
 
