@@ -23,7 +23,8 @@ CONFIGURACIONES_SUGERIDAS = [
 
 def ejecutar_servidor(
 	width: int, height: int, fps: int, jpeg: int, https: bool = False,
-	crt_file: str = "", key_file: str = ""
+	crt_file: str = "", key_file: str = "",
+	unstable: bool = False, cpu_intensive: bool = False, long_range: bool = False,
 ) -> int:
 	"""Lanza el servidor con la configuración indicada."""
 	env = os.environ.copy()
@@ -31,6 +32,13 @@ def ejecutar_servidor(
 	env["FRAME_HEIGHT"] = str(height)
 	env["FPS"] = str(fps)
 	env["JPEG_QUALITY"] = str(jpeg)
+	if unstable:
+		env["UNSTABLE_NETWORK_MODE"] = "1"
+		env["FRAME_BUFFER_SIZE"] = "8"
+	if cpu_intensive:
+		env["CPU_INTENSIVE_MODE"] = "1"
+	if long_range:
+		env["LONG_RANGE_MODE"] = "1"
 	if https:
 		if crt_file and key_file:
 			env["SSL_CRT_FILE"] = crt_file
@@ -52,6 +60,9 @@ def main():
 	parser.add_argument("--https", action="store_true", help="Usar HTTPS (adhoc si no se pasan --crt/--key)")
 	parser.add_argument("--crt", type=str, help="Ruta al certificado PEM (requiere --key)")
 	parser.add_argument("--key", type=str, help="Ruta a la clave privada PEM (requiere --crt)")
+	parser.add_argument("--unstable", action="store_true", help="Modo red inestable (buffer + menor calidad)")
+	parser.add_argument("--cpu-intensive", action="store_true", help="Modo CPU intensivo (más procesamiento)")
+	parser.add_argument("--long-range", action="store_true", help="Modo alcance largo 80m (640x360, 15fps)")
 	args = parser.parse_args()
 
 	if args.listar:
@@ -65,10 +76,17 @@ def main():
 			print(f"     {cmd}\n")
 		return 0
 
-	if args.width is None or args.height is None or args.fps is None or args.jpeg is None:
+	# --long-range ignora width/height/fps/jpeg
+	if not args.long_range and (args.width is None or args.height is None or args.fps is None or args.jpeg is None):
 		print("Usa --listar para ver configuraciones sugeridas.")
 		print("Ejemplo: python pruebas.py --width 640 --height 360 --fps 20 --jpeg 60")
+		print("O: python pruebas.py --long-range")
 		return 1
+
+	if args.long_range:
+		width, height, fps, jpeg = 640, 360, 15, 60
+	else:
+		width, height, fps, jpeg = args.width, args.height, args.fps, args.jpeg
 
 	if args.https and (bool(args.crt) != bool(args.key)):
 		print("Error: --crt y --key deben usarse juntos.")
@@ -78,10 +96,23 @@ def main():
 	crt_file = args.crt or ""
 	key_file = args.key or ""
 
-	modo = "HTTPS" if https else "HTTP"
-	print(f"Ejecutando: {args.width}x{args.height} @ {args.fps}fps, JPEG {args.jpeg}% ({modo})")
+	modos = []
+	if https:
+		modos.append("HTTPS")
+	if args.unstable:
+		modos.append("red inestable")
+	if args.cpu_intensive:
+		modos.append("CPU intensivo")
+	if args.long_range:
+		modos.append("alcance largo")
+
+	modo_str = ", ".join(modos) if modos else "HTTP"
+	print(f"Ejecutando: {width}x{height} @ {fps}fps, JPEG {jpeg}% ({modo_str})")
 	print("Ctrl+C para detener. Anota métricas en RESULTADOS.md\n")
-	return ejecutar_servidor(args.width, args.height, args.fps, args.jpeg, https, crt_file, key_file)
+	return ejecutar_servidor(
+		width, height, fps, jpeg, https, crt_file, key_file,
+		args.unstable, args.cpu_intensive, args.long_range,
+	)
 
 
 if __name__ == "__main__":

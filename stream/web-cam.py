@@ -10,6 +10,7 @@ import threading
 import time
 import psutil
 import json
+from collections import deque
 from flask import Flask, Response, render_template_string
 
 # Configuración de logging
@@ -35,7 +36,26 @@ HTTPS_PORT = int(os.environ.get("HTTPS_PORT", 5000))
 SSL_CRT_FILE = os.environ.get("SSL_CRT_FILE", "")
 SSL_KEY_FILE = os.environ.get("SSL_KEY_FILE", "")
 SSL_ADHOC = os.environ.get("SSL_ADHOC", "0") == "1"
+# Estabilización y optimización
+FRAME_BUFFER_SIZE = int(os.environ.get("FRAME_BUFFER_SIZE", 0))  # 0 = desactivado
+UNSTABLE_NETWORK_MODE = os.environ.get("UNSTABLE_NETWORK_MODE", "0") == "1"
+LONG_RANGE_MODE = os.environ.get("LONG_RANGE_MODE", "0") == "1"
+CPU_INTENSIVE_MODE = os.environ.get("CPU_INTENSIVE_MODE", "0") == "1"
 # ===================================
+
+# Aplicar overrides de modo (después de leer variables base)
+if LONG_RANGE_MODE:
+	FRAME_WIDTH, FRAME_HEIGHT = 640, 360
+	FPS = 15
+	JPEG_QUALITY = 60
+elif UNSTABLE_NETWORK_MODE:
+	FRAME_WIDTH = min(FRAME_WIDTH, 854)
+	FRAME_HEIGHT = min(FRAME_HEIGHT, 480)
+	FPS = min(FPS, 20)
+	JPEG_QUALITY = min(JPEG_QUALITY, 65)
+
+if CPU_INTENSIVE_MODE:
+	JPEG_QUALITY = max(JPEG_QUALITY, 90)
 
 # Variables globales
 camera = None
@@ -44,6 +64,50 @@ frame_count = 0
 bytes_sent = 0
 start_time = time.time()
 stats = {"fps": 0, "cpu": 0, "mem": 0, "uptime": 0, "camera": "Ninguna", "bandwidth_mbps": 0}
+frame_buffer = None
+
+
+class FrameBuffer:
+	"""Cola circular de frames JPEG para clientes. Thread-safe."""
+
+	def __init__(self, maxlen: int):
+		self._deque = deque(maxlen=maxlen)
+		self._lock = threading.Lock()
+
+	def put(self, frame_bytes: bytes) -> None:
+		with self._lock:
+			self._deque.append(frame_bytes)
+
+	def get_latest(self):
+		"""Devuelve el último frame o None si el buffer está vacío."""
+		with self._lock:
+			return self._deque[-1] if self._deque else None
+
+
+def _process_frame(frame):
+	"""Aplica procesamiento opcional para aumentar CPU."""
+	if CPU_INTENSIVE_MODE:
+		h, w = frame.shape[:2]
+		frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_LANCZOS4)
+		frame = cv2.GaussianBlur(frame, (3, 3), 0)
+	return frame
+
+
+def _camera_capture_loop():
+	"""Hilo que captura frames y los pone en el buffer."""
+	global frame_count, frame_buffer
+	encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+	while camera and camera.isOpened():
+		success, frame = camera.read()
+		if not success:
+			time.sleep(0.1)
+			continue
+		frame_count += 1
+		frame = _process_frame(frame)
+		ret, buffer = cv2.imencode(".jpg", frame, encode_param)
+		if ret and frame_buffer:
+			frame_buffer.put(buffer.tobytes())
+		time.sleep(1 / FPS)
 
 
 def find_camera():
@@ -116,30 +180,50 @@ def monitor_system():
         time.sleep(2)
 
 
+def _make_mjpeg_chunk(frame_bytes: bytes) -> bytes:
+	"""Construye chunk MJPEG con Content-Length para mejor parsing en cliente."""
+	header = (
+		b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+		+ str(len(frame_bytes)).encode()
+		+ b"\r\n\r\n"
+	)
+	return header + frame_bytes + b"\r\n"
+
+
 def generate_frames():
-    """Generador de frames para streaming"""
-    global frame_count, bytes_sent
+	"""Generador de frames para streaming."""
+	global frame_count, bytes_sent
 
-    if not camera or not camera.isOpened():
-        logger.error("Cámara no disponible")
-        return
+	if not camera or not camera.isOpened():
+		logger.error("Cámara no disponible")
+		return
 
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
-    while True:
-        success, frame = camera.read()
-        if not success:
-            logger.error("Error capturando frame")
-            break
+	encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
 
-        frame_count += 1
-        ret, buffer = cv2.imencode(".jpg", frame, encode_param)
-        frame_bytes = buffer.tobytes()
-        chunk = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
-        bytes_sent += len(chunk)
-
-        yield chunk
-
-        time.sleep(1 / FPS)
+	if frame_buffer:
+		# Modo buffer: leer desde buffer
+		while True:
+			frame_bytes = frame_buffer.get_latest()
+			if frame_bytes:
+				chunk = _make_mjpeg_chunk(frame_bytes)
+				bytes_sent += len(chunk)
+				yield chunk
+			time.sleep(1 / FPS)
+	else:
+		# Modo directo: leer de cámara
+		while True:
+			success, frame = camera.read()
+			if not success:
+				logger.error("Error capturando frame")
+				break
+			frame_count += 1
+			frame = _process_frame(frame)
+			ret, buffer = cv2.imencode(".jpg", frame, encode_param)
+			frame_bytes = buffer.tobytes()
+			chunk = _make_mjpeg_chunk(frame_bytes)
+			bytes_sent += len(chunk)
+			yield chunk
+			time.sleep(1 / FPS)
 
 
 @app.route("/video_feed")
@@ -174,7 +258,7 @@ def index():
     </head>
     <body>
         <h1>📡 Video desde el dron</h1>
-        <img src="{{ url_for('video_feed') }}" width="1280" height="720">
+        <img id="video_feed" src="{{ url_for('video_feed') }}" width="1280" height="720" alt="Video stream">
         
         <div id="stats">
             <h3>Estadísticas</h3>
@@ -187,15 +271,27 @@ def index():
         </div>
 
         <script>
+            let statsFailCount = 0;
+            const MAX_STATS_FAILS = 3;
+
             function updateStats() {
                 fetch('/stats')
                     .then(response => response.json())
                     .then(data => {
+                        statsFailCount = 0;
                         document.getElementById('fps').textContent = data.fps.toFixed(1);
                         document.getElementById('cpu').textContent = data.cpu;
                         document.getElementById('mem').textContent = data.mem;
                         document.getElementById('bw').textContent = (data.bandwidth_mbps || 0).toFixed(2);
                         document.getElementById('uptime').textContent = Math.floor(data.uptime);
+                    })
+                    .catch(() => {
+                        statsFailCount++;
+                        if (statsFailCount >= MAX_STATS_FAILS) {
+                            const img = document.getElementById('video_feed');
+                            img.src = img.src.split('?')[0] + '?t=' + Date.now();
+                            statsFailCount = 0;
+                        }
                     });
             }
             setInterval(updateStats, 2000);
@@ -227,6 +323,13 @@ if __name__ == "__main__":
     if not init_camera(cam_idx):
         logger.error("No se pudo inicializar la cámara")
         exit(1)
+
+    # Inicializar buffer y thread de captura si está habilitado
+    if FRAME_BUFFER_SIZE > 0:
+        frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
+        camera_thread = threading.Thread(target=_camera_capture_loop, daemon=True)
+        camera_thread.start()
+        logger.info(f"Buffer de frames activo: {FRAME_BUFFER_SIZE} frames")
 
     # Iniciar monitor de sistema en segundo plano
     monitor_thread = threading.Thread(target=monitor_system, daemon=True)

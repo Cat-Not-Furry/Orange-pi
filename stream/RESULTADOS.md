@@ -40,3 +40,31 @@ SSL_ADHOC=1 python web-cam.py
 ```
 
 **Nota**: HTTPS añade cifrado y puede aumentar el uso de CPU en Orange Pi. Anota el impacto en la tabla de métricas.
+
+## Alcance 80m
+
+Para alcance efectivo mínimo de 80 metros:
+
+- **LONG_RANGE_MODE=1**: aplica 640x360, 15 FPS, JPEG 60 automáticamente
+- Usar **2.4 GHz** (mejor penetración que 5 GHz)
+- Antena externa de mayor ganancia si el WiFi integrado no alcanza
+- Reducir obstáculos entre dron y estación de tierra
+
+```bash
+LONG_RANGE_MODE=1 python web-cam.py
+# o con buffer para mayor estabilidad:
+LONG_RANGE_MODE=1 FRAME_BUFFER_SIZE=5 python web-cam.py
+```
+
+## Modo red inestable
+
+Cuando la red es inestable (WiFi con pérdida de paquetes, distancia variable):
+
+- **FRAME_BUFFER_SIZE=5-10**: buffer de frames para reconexión rápida
+- **UNSTABLE_NETWORK_MODE=1**: reduce resolución, FPS y calidad JPEG
+
+```bash
+UNSTABLE_NETWORK_MODE=1 FRAME_BUFFER_SIZE=8 python web-cam.py
+```
+
+El cliente detecta desconexión (3 fallos consecutivos en `/stats`) y recarga el stream automáticamente.
