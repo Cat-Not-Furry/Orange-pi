@@ -1,120 +1,194 @@
 #!/usr/bin/env python3
 """
-Script para mostrar video de cámara USB en el framebuffer (pantalla física)
-sin necesidad de entorno gráfico X11.
+Servidor de streaming con logging y optimizaciones para red WiFi
 """
 
 import cv2
-import numpy as np
-import os
-import sys
+import logging
+import threading
 import time
-import fcntl
-import struct
+import psutil
+import json
+from flask import Flask, Response, render_template_string
+from datetime import datetime
 
-# Configuración
-CAMERA_INDEX = 0  # Cambia si tu cámara es otro índice
-FRAME_WIDTH = 640  # Ancho deseado
-FRAME_HEIGHT = 480  # Alto deseado
-FB_DEVICE = "/dev/fb0"  # Dispositivo framebuffer
-FORMAT = "bgra"  # Formato de píxel para el framebuffer (común)
+# Configuración de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("stream.log"), logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
 
-def get_fb_info():
-    """
-    Obtiene la resolución y bits por píxel del framebuffer usando ioctl.
-    Retorna (ancho, alto, bits_por_pixel) o (None, None, None) si falla.
-    """
-    try:
-        fb = os.open(FB_DEVICE, os.O_RDWR)
-        # Constante FBIOGET_VSCREENINFO = 0x4600
-        # Struct fb_var_screeninfo (simplificada)
-        buf = fcntl.ioctl(fb, 0x4600, " " * 100)
-        os.close(fb)
-        # Desempaquetar los primeros campos: xres (4 bytes), yres (4 bytes), bits_per_pixel (4 bytes)
-        xres = struct.unpack("I", buf[0:4])[0]
-        yres = struct.unpack("I", buf[4:8])[0]
-        bpp = struct.unpack("I", buf[12:16])[0]
-        return xres, yres, bpp
-    except Exception as e:
-        print(f"Error obteniendo info del framebuffer: {e}")
-        return None, None, None
+# Configuración de la cámara
+CAMERA_INDEX = 0
+FRAME_WIDTH = 1280  # HD
+FRAME_HEIGHT = 720  # 720p
+FPS = 30
+BITRATE = 2000  # kbps (ajusta según tu red)
+
+# Variables globales
+camera = None
+frame_count = 0
+start_time = time.time()
+stats = {"fps": 0, "cpu": 0, "mem": 0, "uptime": 0}
 
 
-def main():
-    # 1. Obtener información del framebuffer
-    fb_width, fb_height, fb_bpp = get_fb_info()
-    if fb_width is None:
-        print("No se pudo determinar la resolución del framebuffer.")
-        print("Usando valores por defecto (1920x1080). Ajusta según tu monitor.")
-        fb_width, fb_height = 1920, 1080
-        fb_bpp = 32
-    else:
-        print(f"Framebuffer detectado: {fb_width}x{fb_height}, {fb_bpp} bpp")
+def init_camera():
+    """Inicializa la cámara con configuración óptima"""
+    global camera
+    camera = cv2.VideoCapture(CAMERA_INDEX)
 
-    # 2. Abrir cámara
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    if not cap.isOpened():
-        print(f"Error: No se puede abrir la cámara con índice {CAMERA_INDEX}")
-        print("Prueba con otro índice (1, 2, ...) o verifica la conexión.")
-        sys.exit(1)
+    # Intentar configurar con códec MJPEG si es posible (menor CPU)
+    camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    camera.set(cv2.CAP_PROP_FPS, FPS)
+    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reducir buffer para baja latencia
 
-    # Configurar resolución de captura
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    # Verificar configuración real
+    actual_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = camera.get(cv2.CAP_PROP_FPS)
 
-    # 3. Abrir framebuffer para escritura
-    try:
-        fb = os.open(FB_DEVICE, os.O_RDWR)
-    except Exception as e:
-        print(f"Error abriendo {FB_DEVICE}: {e}")
-        print("Asegúrate de tener permisos (ejecuta con sudo).")
-        sys.exit(1)
+    logger.info(
+        f"Cámara inicializada: {actual_width}x{actual_height} @ {actual_fps}fps"
+    )
 
-    print("Mostrando video en framebuffer. Presiona Ctrl+C para salir.")
+    if actual_width != FRAME_WIDTH:
+        logger.warning(
+            f"Resolución solicitada {FRAME_WIDTH}x{FRAME_HEIGHT} no soportada, usando {actual_width}x{actual_height}"
+        )
 
-    try:
-        while True:
-            # Capturar frame
-            ret, frame = cap.read()
-            if not ret:
-                print("Error leyendo frame de la cámara")
-                break
+    return camera.isOpened()
 
-            # Redimensionar al tamaño del framebuffer
-            # (Si quieres mantener proporción, puedes hacer un resize ajustado)
-            frame_resized = cv2.resize(frame, (fb_width, fb_height))
 
-            # Convertir al formato esperado por el framebuffer
-            # OpenCV por defecto usa BGR, necesitamos BGRA (32 bits) que suele ser compatible
-            # Si fb_bpp es 16, habría que convertir a rgb565, pero por el error sabemos que no es soportado.
-            # Asumimos 32 bits.
-            if fb_bpp == 32:
-                frame_fb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2BGRA)
-            elif fb_bpp == 16:
-                # Intentar convertir a BGR565 (poco común, pero por si acaso)
-                frame_fb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2BGR565)
-            else:
-                print(f"Bits por píxel {fb_bpp} no soportado. Usando BGRA.")
-                frame_fb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2BGRA)
+def monitor_system():
+    """Hilo para monitorear recursos del sistema"""
+    global stats
+    while True:
+        stats["cpu"] = psutil.cpu_percent()
+        stats["mem"] = psutil.virtual_memory().percent
+        stats["uptime"] = time.time() - start_time
+        stats["fps"] = frame_count / stats["uptime"] if stats["uptime"] > 0 else 0
+        time.sleep(2)
 
-            # Escribir en el framebuffer (empezando desde el inicio)
-            os.lseek(fb, 0, os.SEEK_SET)
-            os.write(fb, frame_fb.tobytes())
 
-            # Pequeña pausa para controlar FPS (ajusta según necesites)
-            time.sleep(0.03)  # ~30 FPS
+def generate_frames():
+    """Generador de frames para streaming"""
+    global frame_count
 
-    except KeyboardInterrupt:
-        print("\nDetenido por el usuario.")
-    except Exception as e:
-        print(f"Error durante la reproducción: {e}")
-    finally:
-        # Liberar recursos
-        cap.release()
-        os.close(fb)
-        print("Recursos liberados.")
+    if not camera or not camera.isOpened():
+        logger.error("Cámara no disponible")
+        return
+
+    while True:
+        success, frame = camera.read()
+        if not success:
+            logger.error("Error capturando frame")
+            break
+
+        frame_count += 1
+
+        # Opcional: Reducir calidad para ajustar bitrate
+        # encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # 80% calidad
+        # ret, buffer = cv2.imencode('.jpg', frame, encode_param)
+
+        ret, buffer = cv2.imencode(".jpg", frame)
+        frame_bytes = buffer.tobytes()
+
+        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+
+        # Pequeña pausa para controlar FPS
+        time.sleep(1 / FPS)
+
+
+@app.route("/video_feed")
+def video_feed():
+    logger.info("Cliente conectado al feed de video")
+    return Response(
+        generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.route("/stats")
+def get_stats():
+    """Endpoint para ver estadísticas en tiempo real"""
+    return json.dumps(stats)
+
+
+@app.route("/")
+def index():
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Streaming desde Orange Pi</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: Arial; text-align: center; background: #1a1a1a; color: white; }
+            img { max-width: 100%; border: 2px solid #444; }
+            #stats { margin: 20px; padding: 10px; background: #333; border-radius: 5px; display: inline-block; }
+        </style>
+    </head>
+    <body>
+        <h1>📡 Video desde el dron</h1>
+        <img src="{{ url_for('video_feed') }}" width="1280" height="720">
+        
+        <div id="stats">
+            <h3>Estadísticas</h3>
+            <p>FPS: <span id="fps">0</span></p>
+            <p>CPU: <span id="cpu">0</span>%</p>
+            <p>Memoria: <span id="mem">0</span>%</p>
+            <p>Tiempo activo: <span id="uptime">0</span>s</p>
+        </div>
+        
+        <script>
+            function updateStats() {
+                fetch('/stats')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('fps').textContent = data.fps.toFixed(1);
+                        document.getElementById('cpu').textContent = data.cpu;
+                        document.getElementById('mem').textContent = data.mem;
+                        document.getElementById('uptime').textContent = Math.floor(data.uptime);
+                    });
+            }
+            setInterval(updateStats, 2000);
+        </script>
+    </body>
+    </html>
+    """)
 
 
 if __name__ == "__main__":
-    main()
+    logger.info("Iniciando servidor de streaming...")
+
+    # Verificar dependencias
+    try:
+        import psutil
+    except ImportError:
+        logger.error("psutil no instalado. Ejecuta: pip install psutil")
+        exit(1)
+
+    # Inicializar cámara
+    if not init_camera():
+        logger.error("No se pudo inicializar la cámara")
+        exit(1)
+
+    # Iniciar monitor de sistema en segundo plano
+    monitor_thread = threading.Thread(target=monitor_system, daemon=True)
+    monitor_thread.start()
+
+    # Ejecutar servidor
+    try:
+        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    except KeyboardInterrupt:
+        logger.info("Servidor detenido por el usuario")
+    finally:
+        if camera:
+            camera.release()
+        logger.info("Recursos liberados")
