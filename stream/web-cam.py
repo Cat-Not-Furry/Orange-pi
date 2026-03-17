@@ -30,6 +30,11 @@ FRAME_HEIGHT = int(os.environ.get("FRAME_HEIGHT", 720))
 FPS = int(os.environ.get("FPS", 30))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", 80))  # 0-100
 METRICS_LOG_INTERVAL = int(os.environ.get("METRICS_LOG_INTERVAL", 10))
+# HTTPS (configuración fuera del código)
+HTTPS_PORT = int(os.environ.get("HTTPS_PORT", 5000))
+SSL_CRT_FILE = os.environ.get("SSL_CRT_FILE", "")
+SSL_KEY_FILE = os.environ.get("SSL_KEY_FILE", "")
+SSL_ADHOC = os.environ.get("SSL_ADHOC", "0") == "1"
 # ===================================
 
 # Variables globales
@@ -227,9 +232,20 @@ if __name__ == "__main__":
     monitor_thread = threading.Thread(target=monitor_system, daemon=True)
     monitor_thread.start()
 
+    # Construir ssl_context si hay certificados
+    ssl_context = None
+    if SSL_ADHOC:
+        ssl_context = "adhoc"
+        logger.info("HTTPS activo (certificado adhoc, solo desarrollo)")
+    elif SSL_CRT_FILE and SSL_KEY_FILE and os.path.isfile(SSL_CRT_FILE) and os.path.isfile(SSL_KEY_FILE):
+        ssl_context = (SSL_CRT_FILE, SSL_KEY_FILE)
+        logger.info(f"HTTPS activo con certificados: {SSL_CRT_FILE}")
+    elif SSL_CRT_FILE or SSL_KEY_FILE:
+        logger.warning("SSL_CRT_FILE/SSL_KEY_FILE definidos pero archivos no encontrados. Usando HTTP.")
+
     # Ejecutar servidor
     try:
-        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+        app.run(host="0.0.0.0", port=HTTPS_PORT, debug=False, threaded=True, ssl_context=ssl_context)
     except KeyboardInterrupt:
         logger.info("Servidor detenido por el usuario")
     finally:

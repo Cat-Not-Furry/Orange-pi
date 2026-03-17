@@ -45,6 +45,14 @@ Thumbs.db
 *.local
 *.env.local
 
+# Certificados SSL (no versionar)
+*.pem
+*.key
+
 # Archivos de pruebas temporales
 test_*.py
 temp_*
+analisis_profundo.md
+indice_agente.md
+reglas_rapidas.md
+stream/RESULTADOS.md

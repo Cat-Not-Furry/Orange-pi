@@ -21,13 +21,22 @@ CONFIGURACIONES_SUGERIDAS = [
 ]
 
 
-def ejecutar_servidor(width: int, height: int, fps: int, jpeg: int) -> int:
+def ejecutar_servidor(
+	width: int, height: int, fps: int, jpeg: int, https: bool = False,
+	crt_file: str = "", key_file: str = ""
+) -> int:
 	"""Lanza el servidor con la configuración indicada."""
 	env = os.environ.copy()
 	env["FRAME_WIDTH"] = str(width)
 	env["FRAME_HEIGHT"] = str(height)
 	env["FPS"] = str(fps)
 	env["JPEG_QUALITY"] = str(jpeg)
+	if https:
+		if crt_file and key_file:
+			env["SSL_CRT_FILE"] = crt_file
+			env["SSL_KEY_FILE"] = key_file
+		else:
+			env["SSL_ADHOC"] = "1"
 	script_dir = os.path.dirname(os.path.abspath(__file__))
 	web_cam = os.path.join(script_dir, "web-cam.py")
 	return subprocess.run([sys.executable, web_cam], env=env).returncode
@@ -40,6 +49,9 @@ def main():
 	parser.add_argument("--fps", type=int, help="Frames por segundo")
 	parser.add_argument("--jpeg", type=int, help="Calidad JPEG 0-100")
 	parser.add_argument("--listar", action="store_true", help="Listar configuraciones sugeridas")
+	parser.add_argument("--https", action="store_true", help="Usar HTTPS (adhoc si no se pasan --crt/--key)")
+	parser.add_argument("--crt", type=str, help="Ruta al certificado PEM (requiere --key)")
+	parser.add_argument("--key", type=str, help="Ruta a la clave privada PEM (requiere --crt)")
 	args = parser.parse_args()
 
 	if args.listar:
@@ -58,9 +70,18 @@ def main():
 		print("Ejemplo: python pruebas.py --width 640 --height 360 --fps 20 --jpeg 60")
 		return 1
 
-	print(f"Ejecutando: {args.width}x{args.height} @ {args.fps}fps, JPEG {args.jpeg}%")
+	if args.https and (bool(args.crt) != bool(args.key)):
+		print("Error: --crt y --key deben usarse juntos.")
+		return 1
+
+	https = args.https
+	crt_file = args.crt or ""
+	key_file = args.key or ""
+
+	modo = "HTTPS" if https else "HTTP"
+	print(f"Ejecutando: {args.width}x{args.height} @ {args.fps}fps, JPEG {args.jpeg}% ({modo})")
 	print("Ctrl+C para detener. Anota métricas en RESULTADOS.md\n")
-	return ejecutar_servidor(args.width, args.height, args.fps, args.jpeg)
+	return ejecutar_servidor(args.width, args.height, args.fps, args.jpeg, https, crt_file, key_file)
 
 
 if __name__ == "__main__":

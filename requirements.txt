@@ -1,3 +1,6 @@
 pynmea2==1.19.0
 pyserial==3.5
 opencv-python
+psutil
+flask
+pyopenssl==24.0.0
