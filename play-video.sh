@@ -75,7 +75,7 @@ if [ -z "$PIXFMT" ]; then
     if [[ "$RGBA" == *"5/11,6/5,5/0"* ]]; then
       PIXFMT="rgb565"
     elif [[ "$RGBA" == *"8/16,8/8,8/0"* ]]; then
-      PIXFMT="rgb888"
+      PIXFMT="bgra"
     else
       PIXFMT="bgra"
     fi
