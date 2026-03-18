@@ -44,19 +44,22 @@ from flask import Flask, Response, render_template_string
 _UDP_CHUNK_MAX = 1400
 _UDP_HEADER_SIZE = 8
 
+# ===== CONFIGURACIÓN AJUSTABLE =====
+# Pueden sobreescribirse con variables de entorno (ej. FRAME_WIDTH=640 pruebas.py)
+LOG_FILE = os.environ.get("LOG_FILE", "stream.log")
+_cam_str = os.environ.get("CAMERA_INDICES", "0,1,2")
+CAMERA_INDICES = [int(x.strip()) for x in _cam_str.split(",") if x.strip()]
+PAGE_TITLE = os.environ.get("PAGE_TITLE", "Streaming de video")
+
 # Configuración de logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("stream.log"), logging.StreamHandler()],
+	level=logging.INFO,
+	format="%(asctime)s - %(levelname)s - %(message)s",
+	handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
-# ===== CONFIGURACIÓN AJUSTABLE =====
-# Pueden sobreescribirse con variables de entorno (ej. FRAME_WIDTH=640 pruebas.py)
-CAMERA_INDICES = [0, 1, 2]  # /dev/video0, video1, video2
 FRAME_WIDTH = int(os.environ.get("FRAME_WIDTH", 1280))
 FRAME_HEIGHT = int(os.environ.get("FRAME_HEIGHT", 720))
 FPS = int(os.environ.get("FPS", 30))
@@ -82,10 +85,18 @@ RECORD_ENABLED = os.environ.get("RECORD_ENABLED", "0") == "1"
 RECORD_OUTPUT_DIR = os.environ.get("RECORD_OUTPUT_DIR", "./recordings")
 RECORD_WIDTH = int(os.environ.get("RECORD_WIDTH", 1920))
 RECORD_HEIGHT = int(os.environ.get("RECORD_HEIGHT", 1080))
+RECORD_QUALITY = int(os.environ.get("RECORD_QUALITY", 95))
+RECORD_USE_CAMERA_NATIVE = os.environ.get("RECORD_USE_CAMERA_NATIVE", "0") == "1"
+# 60 FPS estable
+FPS_60_MODE = os.environ.get("FPS_60_MODE", "0") == "1"
 # ===================================
 
 # Aplicar overrides de modo (después de leer variables base)
-if LONG_RANGE_MODE:
+if FPS_60_MODE:
+	FRAME_WIDTH, FRAME_HEIGHT = 1280, 720
+	FPS = 60
+	JPEG_QUALITY = 80
+elif LONG_RANGE_MODE:
 	FRAME_WIDTH, FRAME_HEIGHT = 640, 360
 	FPS = 15
 	JPEG_QUALITY = 60
@@ -99,8 +110,12 @@ if CPU_INTENSIVE_MODE:
 	JPEG_QUALITY = max(JPEG_QUALITY, 90)
 
 if RECORD_ENABLED:
-	FRAME_WIDTH = RECORD_WIDTH
-	FRAME_HEIGHT = RECORD_HEIGHT
+	if RECORD_USE_CAMERA_NATIVE:
+		FRAME_WIDTH = 3840
+		FRAME_HEIGHT = 2160
+	else:
+		FRAME_WIDTH = RECORD_WIDTH
+		FRAME_HEIGHT = RECORD_HEIGHT
 
 # Variables globales
 camera = None
@@ -185,7 +200,7 @@ def _udp_send_loop(frame_getter, target_ip: str, target_port: int, fps: float) -
 
 
 def _init_video_writer(width: int, height: int, fps: float):
-	"""Crea VideoWriter para grabación. Prueba H264, MP4V, MJPEG."""
+	"""Crea VideoWriter para grabación. Prueba H264, MP4V, MJPEG. Aplica RECORD_QUALITY si el backend lo soporta."""
 	os.makedirs(RECORD_OUTPUT_DIR, exist_ok=True)
 	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 	codecs = [
@@ -194,12 +209,17 @@ def _init_video_writer(width: int, height: int, fps: float):
 		("mp4v", ".mp4"),
 		("MJPG", ".avi"),
 	]
+	quality_prop = getattr(cv2, "VIDEOWRITER_PROP_QUALITY", 1)
 	for fourcc_str, ext in codecs:
 		path = os.path.join(RECORD_OUTPUT_DIR, f"recording_{timestamp}{ext}")
 		fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
 		writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
 		if writer.isOpened():
-			logger.info(f"Grabación activa: {path} ({fourcc_str}, {width}x{height} @ {fps}fps)")
+			try:
+				writer.set(quality_prop, RECORD_QUALITY)
+			except Exception:
+				pass
+			logger.info(f"Grabación activa: {path} ({fourcc_str}, {width}x{height} @ {fps}fps, calidad={RECORD_QUALITY})")
 			return writer
 		writer.release()
 	logger.error("No se pudo inicializar ningún códec de video para grabación")
@@ -397,23 +417,23 @@ def get_stats():
 
 @app.route("/")
 def index():
-    return render_template_string(
-        """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Streaming desde Orange Pi</title>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body { font-family: Arial; text-align: center; background: #1a1a1a; color: white; }
-            img { max-width: 100%; border: 2px solid #444; }
-            #stats { margin: 20px; padding: 10px; background: #333; border-radius: 5px; display: inline-block; }
-        </style>
-    </head>
-    <body>
-        <h1>📡 Video desde el dron</h1>
-        <img id="video_feed" src="{{ url_for('video_feed') }}" width="1280" height="720" alt="Video stream">
+	return render_template_string(
+		"""
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<title>{{ page_title }}</title>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<style>
+			body { font-family: Arial; text-align: center; background: #1a1a1a; color: white; }
+			img { max-width: 100%; border: 2px solid #444; }
+			#stats { margin: 20px; padding: 10px; background: #333; border-radius: 5px; display: inline-block; }
+		</style>
+	</head>
+	<body>
+		<h1>Streaming de video</h1>
+		<img id="video_feed" src="{{ url_for('video_feed') }}" width="{{ frame_width }}" height="{{ frame_height }}" alt="Video stream">
         
         <div id="stats">
             <h3>Estadísticas</h3>
@@ -452,10 +472,13 @@ def index():
             setInterval(updateStats, 2000);
         </script>
     </body>
-    </html>
-    """,
-        stats=stats,
-    )
+	</html>
+	""",
+		stats=stats,
+		page_title=PAGE_TITLE,
+		frame_width=FRAME_WIDTH,
+		frame_height=FRAME_HEIGHT,
+	)
 
 
 if __name__ == "__main__":
@@ -498,10 +521,13 @@ if __name__ == "__main__":
 			from resource_limiter import ResourceLimiter
 		except ImportError:
 			from stream.resource_limiter import ResourceLimiter
+		initial_level = 7 if FPS_60_MODE else int(os.environ.get("RESOURCE_INITIAL_LEVEL", 4))
+		initial_level = max(0, min(initial_level, 8))
 		resource_limiter = ResourceLimiter(
 			cpu_target=float(os.environ.get("CPU_TARGET_PCT", 70)),
 			ram_target=float(os.environ.get("RAM_TARGET_PCT", 70)),
 			target_fps=int(os.environ.get("TARGET_FPS", 60)),
+			initial_level=initial_level,
 		)
 		dynamic_params.update(resource_limiter.get_recommended_params())
 

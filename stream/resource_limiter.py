@@ -48,7 +48,9 @@ class ResourceLimiter:
 		self.ram_target = float(os.environ.get("RAM_TARGET_PCT", ram_target))
 		self.target_fps = int(os.environ.get("TARGET_FPS", target_fps))
 		self.adapt_interval = float(os.environ.get("ADAPT_INTERVAL_SEC", adapt_interval_sec))
-		self._level = max(0, min(initial_level, len(QUALITY_LEVELS) - 1))
+		env_level = os.environ.get("RESOURCE_INITIAL_LEVEL")
+		level_val = int(env_level) if env_level is not None else initial_level
+		self._level = max(0, min(level_val, len(QUALITY_LEVELS) - 1))
 		self._lock = threading.Lock()
 		self._params = self._level_to_params(self._level)
 		self._stop = threading.Event()

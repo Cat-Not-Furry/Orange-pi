@@ -37,16 +37,21 @@ MODOS = [
 		"env": {"SSL_ADHOC": "1", "FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "30", "JPEG_QUALITY": "80"},
 	},
 	{
-		"nombre": "Grabar video (alta calidad, máxima resolución)",
+		"nombre": "60 FPS estable (1280x720)",
+		"env": {"FPS_60_MODE": "1", "FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "60", "JPEG_QUALITY": "80"},
+	},
+	{
+		"nombre": "Grabar video (máxima calidad, 60fps)",
 		"env": {
 			"RECORD_ENABLED": "1",
 			"RECORD_WIDTH": "1920",
 			"RECORD_HEIGHT": "1080",
+			"RECORD_QUALITY": "95",
 			"RECORD_OUTPUT_DIR": "./recordings",
 			"FRAME_WIDTH": "1920",
 			"FRAME_HEIGHT": "1080",
-			"FPS": "30",
-			"JPEG_QUALITY": "90",
+			"FPS": "60",
+			"JPEG_QUALITY": "95",
 		},
 	},
 ]

@@ -11,6 +11,16 @@ Servidor de streaming de video desde cámara USB (compatible con Orange Pi y Ras
 pip install -r ../requirements.txt
 ```
 
+## Requisitos de red (solo conexión a host)
+
+El proyecto **no requiere conexión a internet**. Solo necesita que el dispositivo (Orange Pi, Raspberry Pi) y el cliente (laptop) estén en la misma red local:
+
+```
+[Laptop] <--WiFi/Ethernet--> [Router/AP] <--WiFi/Ethernet--> [Orange Pi / Raspberry Pi]
+```
+
+El router no necesita estar conectado a internet (WAN). La transmisión es exclusivamente entre dispositivos en la red local.
+
 ## Inicio básico
 
 ```bash
@@ -57,6 +67,9 @@ Configuración sin modificar código:
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
+| `CAMERA_INDICES` | 0,1,2 | Índices de cámara a probar (/dev/video0, etc.) |
+| `LOG_FILE` | stream.log | Archivo de log |
+| `PAGE_TITLE` | Streaming de video | Título de la página web |
 | `FRAME_WIDTH` | 1280 | Ancho de frame |
 | `FRAME_HEIGHT` | 720 | Alto de frame |
 | `FPS` | 30 | Frames por segundo |
@@ -65,13 +78,17 @@ Configuración sin modificar código:
 | `FRAME_BUFFER_SIZE` | 0 | Buffer de frames (0=desactivado) |
 | `LONG_RANGE_MODE` | 0 | 1 = 640x360, 15fps (alcance 80m) |
 | `UNSTABLE_NETWORK_MODE` | 0 | 1 = menor resolución para red inestable |
+| `FPS_60_MODE` | 0 | 1 = 1280x720 a 60 fps estable |
 | `DYNAMIC_RESOURCES` | 0 | 1 = ajuste dinámico CPU/RAM ~70% |
+| `RESOURCE_INITIAL_LEVEL` | 4 | Nivel inicial (0-8) para recursos dinámicos |
 | `UDP_ENABLED` | 0 | 1 = envío UDP activo |
 | `UDP_TARGET_IP` | 127.0.0.1 | IP destino UDP |
 | `UDP_TARGET_PORT` | 5005 | Puerto destino UDP |
 | `RECORD_ENABLED` | 0 | 1 = grabación activa |
 | `RECORD_WIDTH` | 1920 | Ancho para grabación |
 | `RECORD_HEIGHT` | 1080 | Alto para grabación |
+| `RECORD_QUALITY` | 95 | Calidad de grabación (0-100, MJPEG) |
+| `RECORD_USE_CAMERA_NATIVE` | 0 | 1 = usar resolución nativa de la cámara |
 | `RECORD_OUTPUT_DIR` | ./recordings | Carpeta de grabaciones |
 | `SSL_CRT_FILE` | - | Ruta certificado HTTPS |
 | `SSL_KEY_FILE` | - | Ruta clave privada HTTPS |
@@ -88,6 +105,9 @@ UNSTABLE_NETWORK_MODE=1 FRAME_BUFFER_SIZE=8 python web-cam.py
 
 # Recursos dinámicos (CPU ~70%)
 DYNAMIC_RESOURCES=1 python web-cam.py
+
+# 60 FPS estable
+FPS_60_MODE=1 python web-cam.py
 
 # Grabación 1920x1080
 RECORD_ENABLED=1 RECORD_WIDTH=1920 RECORD_HEIGHT=1080 python web-cam.py
@@ -109,7 +129,8 @@ Ejecuta `python menu.py` para acceder a modos sin escribir variables:
 4. Recursos dinámicos (CPU/RAM ~70%)
 5. UDP (transmitir video por red)
 6. HTTPS (certificado adhoc)
-7. Grabar video (alta calidad, máxima resolución)
+7. 60 FPS estable (1280x720)
+8. Grabar video (máxima calidad, 60fps)
 
 ## Endpoints HTTP
 
@@ -124,6 +145,8 @@ Ejecuta `python menu.py` para acceder a modos sin escribir variables:
 Con `--record` o `RECORD_ENABLED=1`:
 
 - Resolución: 1920x1080 por defecto (configurable con `RECORD_WIDTH`, `RECORD_HEIGHT`)
+- `RECORD_USE_CAMERA_NATIVE=1`: usa la resolución máxima que reporte la cámara
+- `RECORD_QUALITY=95`: calidad de grabación (0-100, aplica a MJPEG cuando el backend lo soporta)
 - Salida: `./recordings/recording_YYYYMMDD_HHMMSS.mp4` (o `.avi` si H264/MP4V no están disponibles)
 - Códecs probados en orden: avc1, H264, MP4V, MJPEG
 
@@ -132,7 +155,7 @@ Ctrl+C detiene el servidor y cierra el archivo de grabación correctamente.
 ## Logs
 
 - Consola: métricas cada 10 segundos (FPS, CPU, memoria, ancho de banda)
-- Archivo: `stream.log` en el directorio actual
+- Archivo: `stream.log` por defecto (configurable con `LOG_FILE`)
 
 ## Detener
 
