@@ -10,7 +10,7 @@ python menu.py
 python pruebas.py
 ```
 
-Menú: Normal, Alcance largo, Red inestable, Recursos dinámicos, UDP, HTTPS, Grabar video (alta calidad).
+Menú: Máxima calidad, Alcance largo, Red inestable, 60 FPS estable, Recursos dinámicos, HTTPS.
 
 | Resolución | FPS | Calidad JPEG | FPS real (medido) | CPU % | Ancho de banda (aprox) | Latencia percibida |
 |------------|-----|--------------|-------------------|-------|------------------------|--------------------|
@@ -77,30 +77,14 @@ UNSTABLE_NETWORK_MODE=1 FRAME_BUFFER_SIZE=8 python web-cam.py
 
 El cliente detecta desconexión (3 fallos consecutivos en `/stats`) y recarga el stream automáticamente.
 
-## UDP
+## Grabación en laptop
 
-Envío de video por UDP (integrado en web-cam.py):
-
-```bash
-python web-cam.py --udp
-python web-cam.py --udp --udp-ip 192.168.1.50 --udp-port 5005
-```
-
-Variables: `UDP_ENABLED=1`, `UDP_TARGET_IP`, `UDP_TARGET_PORT`.
-
-El socket UDP usa buffer de salida ampliado (256 KB) para reducir pérdida en redes de largo alcance.
-
-## Grabación en alta calidad
-
-Grabar video local en máxima resolución (1920x1080 por defecto):
+La grabación se hace en la laptop con `recorder.py`:
 
 ```bash
-python web-cam.py --record
-python web-cam.py --record --record-dir /ruta/destino
+# En la laptop (misma red que Orange Pi)
+python recorder.py --host IP_ORANGE_PI --port 5000
+python recorder.py --url http://192.168.1.100:5000/video_feed --output-dir ./videos
 ```
 
-O desde menú: opción "Grabar video (alta calidad, máxima resolución)".
-
-Variables: `RECORD_ENABLED=1`, `RECORD_WIDTH`, `RECORD_HEIGHT`, `RECORD_OUTPUT_DIR`.
-
-Los archivos se guardan en `./recordings/recording_YYYYMMDD_HHMMSS.mp4` (o .avi si solo MJPEG está disponible).
+En el Orange Pi, usar modo "Máxima calidad" para mejor resultado. Los archivos se guardan en `./recordings/` de la laptop.

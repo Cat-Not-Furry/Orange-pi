@@ -1,34 +1,11 @@
 #!/usr/bin/env python3
 """
 Servidor de streaming con soporte para múltiples cámaras (/dev/video0, video1, ...)
+Solo transmisión HTTP. Para grabar en laptop, usar recorder.py.
 """
 
 import os
 import sys
-import socket
-import struct
-from datetime import datetime
-
-# Parsear --udp, --udp-ip, --udp-port, --record, --record-dir antes de leer config
-if __name__ == "__main__":
-	import argparse
-	_parser = argparse.ArgumentParser()
-	_parser.add_argument("--udp", action="store_true", help="Activar envío UDP")
-	_parser.add_argument("--udp-ip", type=str, help="IP destino UDP")
-	_parser.add_argument("--udp-port", type=int, help="Puerto destino UDP")
-	_parser.add_argument("--record", action="store_true", help="Grabar video en alta calidad y máxima resolución")
-	_parser.add_argument("--record-dir", type=str, help="Directorio de salida para grabaciones")
-	_args, _ = _parser.parse_known_args()
-	if _args.udp:
-		os.environ.setdefault("UDP_ENABLED", "1")
-	if _args.udp_ip:
-		os.environ["UDP_TARGET_IP"] = _args.udp_ip
-	if _args.udp_port:
-		os.environ["UDP_TARGET_PORT"] = str(_args.udp_port)
-	if _args.record:
-		os.environ.setdefault("RECORD_ENABLED", "1")
-	if _args.record_dir:
-		os.environ["RECORD_OUTPUT_DIR"] = _args.record_dir
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cv2
@@ -39,10 +16,6 @@ import psutil
 import json
 from collections import deque
 from flask import Flask, Response, render_template_string
-
-# UDP: fragmentación (frame_id 4B + chunk_idx 2B + total 2B + payload)
-_UDP_CHUNK_MAX = 1400
-_UDP_HEADER_SIZE = 8
 
 # ===== CONFIGURACIÓN AJUSTABLE =====
 # Pueden sobreescribirse con variables de entorno (ej. FRAME_WIDTH=640 pruebas.py)
@@ -75,24 +48,20 @@ FRAME_BUFFER_SIZE = int(os.environ.get("FRAME_BUFFER_SIZE", 0))  # 0 = desactiva
 UNSTABLE_NETWORK_MODE = os.environ.get("UNSTABLE_NETWORK_MODE", "0") == "1"
 LONG_RANGE_MODE = os.environ.get("LONG_RANGE_MODE", "0") == "1"
 CPU_INTENSIVE_MODE = os.environ.get("CPU_INTENSIVE_MODE", "0") == "1"
-# Recursos dinámicos y UDP
+# Recursos dinámicos
 DYNAMIC_RESOURCES = os.environ.get("DYNAMIC_RESOURCES", "0") == "1"
-UDP_ENABLED = os.environ.get("UDP_ENABLED", "0") == "1"
-UDP_TARGET_IP = os.environ.get("UDP_TARGET_IP", "127.0.0.1")
-UDP_TARGET_PORT = int(os.environ.get("UDP_TARGET_PORT", 5005))
-# Grabación en alta calidad
-RECORD_ENABLED = os.environ.get("RECORD_ENABLED", "0") == "1"
-RECORD_OUTPUT_DIR = os.environ.get("RECORD_OUTPUT_DIR", "./recordings")
-RECORD_WIDTH = int(os.environ.get("RECORD_WIDTH", 1920))
-RECORD_HEIGHT = int(os.environ.get("RECORD_HEIGHT", 1080))
-RECORD_QUALITY = int(os.environ.get("RECORD_QUALITY", 95))
-RECORD_USE_CAMERA_NATIVE = os.environ.get("RECORD_USE_CAMERA_NATIVE", "0") == "1"
+# Máxima calidad (transmisión óptima para grabación en laptop)
+MAX_QUALITY_MODE = os.environ.get("MAX_QUALITY_MODE", "0") == "1"
 # 60 FPS estable
 FPS_60_MODE = os.environ.get("FPS_60_MODE", "0") == "1"
 # ===================================
 
 # Aplicar overrides de modo (después de leer variables base)
-if FPS_60_MODE:
+if MAX_QUALITY_MODE:
+	FRAME_WIDTH, FRAME_HEIGHT = 1920, 1080
+	FPS = 60
+	JPEG_QUALITY = 95
+elif FPS_60_MODE:
 	FRAME_WIDTH, FRAME_HEIGHT = 1280, 720
 	FPS = 60
 	JPEG_QUALITY = 80
@@ -109,14 +78,6 @@ elif UNSTABLE_NETWORK_MODE:
 if CPU_INTENSIVE_MODE:
 	JPEG_QUALITY = max(JPEG_QUALITY, 90)
 
-if RECORD_ENABLED:
-	if RECORD_USE_CAMERA_NATIVE:
-		FRAME_WIDTH = 3840
-		FRAME_HEIGHT = 2160
-	else:
-		FRAME_WIDTH = RECORD_WIDTH
-		FRAME_HEIGHT = RECORD_HEIGHT
-
 # Variables globales
 camera = None
 camera_index = None
@@ -126,7 +87,6 @@ start_time = time.time()
 stats = {"fps": 0, "cpu": 0, "mem": 0, "uptime": 0, "camera": "Ninguna", "bandwidth_mbps": 0}
 frame_buffer = None
 resource_limiter = None
-video_writer = None
 dynamic_params = {"fps": FPS, "jpeg_quality": JPEG_QUALITY, "width": FRAME_WIDTH, "height": FRAME_HEIGHT}
 
 
@@ -157,82 +117,6 @@ def _get_current_jpeg_quality():
 	return dynamic_params["jpeg_quality"] if DYNAMIC_RESOURCES and resource_limiter else JPEG_QUALITY
 
 
-def _udp_fragment_and_send(sock, target: tuple, frame_bytes: bytes, frame_id: int) -> int:
-	"""Fragmenta y envía un frame por UDP."""
-	payload_size = _UDP_CHUNK_MAX - _UDP_HEADER_SIZE
-	total = (len(frame_bytes) + payload_size - 1) // payload_size
-	sent = 0
-	for idx in range(total):
-		offset = idx * payload_size
-		chunk_data = frame_bytes[offset : offset + payload_size]
-		header = struct.pack(">IHH", frame_id, idx, total)
-		try:
-			sock.sendto(header + chunk_data, target)
-			sent += len(header) + len(chunk_data)
-		except OSError as e:
-			logger.warning(f"UDP send: {e}")
-			break
-	return sent
-
-
-def _udp_send_loop(frame_getter, target_ip: str, target_port: int, fps: float) -> None:
-	"""Hilo que envía frames por UDP."""
-	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	# Buffer de salida mayor para reducir pérdida en redes de largo alcance
-	try:
-		sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 256 * 1024)
-	except OSError:
-		pass
-	target = (target_ip, target_port)
-	frame_id = 0
-	interval = 1.0 / fps if fps > 0 else 0.033
-	next_send = time.perf_counter()
-	while True:
-		frame_bytes = frame_getter()
-		if frame_bytes:
-			_udp_fragment_and_send(sock, target, frame_bytes, frame_id)
-			frame_id = (frame_id + 1) & 0xFFFFFFFF
-		next_send += interval
-		now = time.perf_counter()
-		if next_send < now:
-			next_send = now + interval
-		time.sleep(max(0, next_send - now))
-
-
-def _init_video_writer(width: int, height: int, fps: float):
-	"""Crea VideoWriter para grabación. Prueba H264, MP4V, MJPEG. Aplica RECORD_QUALITY si el backend lo soporta."""
-	os.makedirs(RECORD_OUTPUT_DIR, exist_ok=True)
-	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-	codecs = [
-		("avc1", ".mp4"),
-		("H264", ".mp4"),
-		("mp4v", ".mp4"),
-		("MJPG", ".avi"),
-	]
-	quality_prop = getattr(cv2, "VIDEOWRITER_PROP_QUALITY", 1)
-	for fourcc_str, ext in codecs:
-		path = os.path.join(RECORD_OUTPUT_DIR, f"recording_{timestamp}{ext}")
-		fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
-		writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
-		if writer.isOpened():
-			try:
-				writer.set(quality_prop, RECORD_QUALITY)
-			except Exception:
-				pass
-			logger.info(f"Grabación activa: {path} ({fourcc_str}, {width}x{height} @ {fps}fps, calidad={RECORD_QUALITY})")
-			return writer
-		writer.release()
-	logger.error("No se pudo inicializar ningún códec de video para grabación")
-	return None
-
-
-def _write_frame_if_recording(frame):
-	"""Escribe frame en video_writer si la grabación está activa."""
-	global video_writer
-	if video_writer and video_writer.isOpened():
-		video_writer.write(frame)
-
-
 def _process_frame(frame):
 	"""Aplica procesamiento opcional para aumentar CPU."""
 	if CPU_INTENSIVE_MODE:
@@ -253,7 +137,6 @@ def _camera_capture_loop():
 			continue
 		frame_count += 1
 		frame = _process_frame(frame)
-		_write_frame_if_recording(frame)
 		jpeg_q = _get_current_jpeg_quality()
 		encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_q]
 		ret, buffer = cv2.imencode(".jpg", frame, encode_param)
@@ -383,7 +266,6 @@ def generate_frames():
 				break
 			frame_count += 1
 			frame = _process_frame(frame)
-			_write_frame_if_recording(frame)
 			jpeg_q = _get_current_jpeg_quality()
 			encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_q]
 			ret, buffer = cv2.imencode(".jpg", frame, encode_param)
@@ -499,22 +381,11 @@ if __name__ == "__main__":
 		logger.error("No se pudo inicializar la cámara")
 		exit(1)
 
-	if RECORD_ENABLED:
-		actual_w = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
-		actual_h = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-		actual_fps = camera.get(cv2.CAP_PROP_FPS) or FPS
-		video_writer = _init_video_writer(actual_w, actual_h, actual_fps)
-
-	if FRAME_BUFFER_SIZE > 0 or UDP_ENABLED:
-		if FRAME_BUFFER_SIZE <= 0 and UDP_ENABLED:
-			frame_buffer = FrameBuffer(maxlen=5)
-			logger.info("Buffer activo para UDP (5 frames)")
-		else:
-			frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
+	if FRAME_BUFFER_SIZE > 0:
+		frame_buffer = FrameBuffer(maxlen=FRAME_BUFFER_SIZE)
 		camera_thread = threading.Thread(target=_camera_capture_loop, daemon=True)
 		camera_thread.start()
-		buf_size = FRAME_BUFFER_SIZE if FRAME_BUFFER_SIZE > 0 else 5
-		logger.info(f"Buffer de frames activo: {buf_size} frames")
+		logger.info(f"Buffer de frames activo: {FRAME_BUFFER_SIZE} frames")
 
 	if DYNAMIC_RESOURCES:
 		try:
@@ -537,19 +408,6 @@ if __name__ == "__main__":
 		resource_limiter.start_adaptation_loop(_on_params_updated)
 		logger.info("Modo dinámico de recursos activo")
 
-	if UDP_ENABLED and frame_buffer:
-		def _udp_frame_getter():
-			return frame_buffer.get_latest() if frame_buffer else None
-
-		udp_fps = _get_current_fps() if (DYNAMIC_RESOURCES and resource_limiter) else FPS
-		udp_thread = threading.Thread(
-			target=_udp_send_loop,
-			args=(_udp_frame_getter, UDP_TARGET_IP, UDP_TARGET_PORT, udp_fps),
-			daemon=True,
-		)
-		udp_thread.start()
-		logger.info(f"UDP activo: {UDP_TARGET_IP}:{UDP_TARGET_PORT}")
-
 	monitor_thread = threading.Thread(target=monitor_system, daemon=True)
 	monitor_thread.start()
 
@@ -570,7 +428,4 @@ if __name__ == "__main__":
 	finally:
 		if camera:
 			camera.release()
-		if video_writer and video_writer.isOpened():
-			video_writer.release()
-			logger.info("Grabación finalizada")
 		logger.info("Recursos liberados")

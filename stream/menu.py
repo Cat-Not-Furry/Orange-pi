@@ -13,8 +13,8 @@ WEB_CAM = os.path.join(SCRIPT_DIR, "web-cam.py")
 
 MODOS = [
 	{
-		"nombre": "Normal (HTTP, 1280x720, 30fps)",
-		"env": {"FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "30", "JPEG_QUALITY": "80"},
+		"nombre": "Máxima calidad (1920x1080, 60fps) - para grabación en laptop",
+		"env": {"MAX_QUALITY_MODE": "1"},
 	},
 	{
 		"nombre": "Alcance largo 80m (640x360, 15fps)",
@@ -25,34 +25,16 @@ MODOS = [
 		"env": {"UNSTABLE_NETWORK_MODE": "1", "FRAME_BUFFER_SIZE": "8"},
 	},
 	{
+		"nombre": "60 FPS estable (1280x720)",
+		"env": {"FPS_60_MODE": "1"},
+	},
+	{
 		"nombre": "Recursos dinámicos (CPU/RAM ~70%)",
 		"env": {"DYNAMIC_RESOURCES": "1", "FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "30", "JPEG_QUALITY": "80"},
 	},
 	{
-		"nombre": "UDP (transmitir video por red)",
-		"env": {"UDP_ENABLED": "1", "FRAME_WIDTH": "640", "FRAME_HEIGHT": "360", "FPS": "30", "JPEG_QUALITY": "60"},
-	},
-	{
 		"nombre": "HTTPS (certificado adhoc)",
 		"env": {"SSL_ADHOC": "1", "FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "30", "JPEG_QUALITY": "80"},
-	},
-	{
-		"nombre": "60 FPS estable (1280x720)",
-		"env": {"FPS_60_MODE": "1", "FRAME_WIDTH": "1280", "FRAME_HEIGHT": "720", "FPS": "60", "JPEG_QUALITY": "80"},
-	},
-	{
-		"nombre": "Grabar video (máxima calidad, 60fps)",
-		"env": {
-			"RECORD_ENABLED": "1",
-			"RECORD_WIDTH": "1920",
-			"RECORD_HEIGHT": "1080",
-			"RECORD_QUALITY": "95",
-			"RECORD_OUTPUT_DIR": "./recordings",
-			"FRAME_WIDTH": "1920",
-			"FRAME_HEIGHT": "1080",
-			"FPS": "60",
-			"JPEG_QUALITY": "95",
-		},
 	},
 ]
 
@@ -62,6 +44,7 @@ def mostrar_menu():
 	for i, modo in enumerate(MODOS, 1):
 		print(f"  {i}. {modo['nombre']}")
 	print("  0. Salir")
+	print("  Para grabar en laptop: python recorder.py --host IP_ORANGE_PI --port 5000")
 	print()
 
 

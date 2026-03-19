@@ -25,8 +25,7 @@ def ejecutar_servidor(
 	width: int, height: int, fps: int, jpeg: int, https: bool = False,
 	crt_file: str = "", key_file: str = "",
 	unstable: bool = False, cpu_intensive: bool = False, long_range: bool = False,
-	dynamic: bool = False, udp: bool = False,
-	record: bool = False, record_dir: str = "",
+	dynamic: bool = False, max_quality: bool = False,
 ) -> int:
 	"""Lanza el servidor con la configuración indicada."""
 	env = os.environ.copy()
@@ -43,17 +42,8 @@ def ejecutar_servidor(
 		env["LONG_RANGE_MODE"] = "1"
 	if dynamic:
 		env["DYNAMIC_RESOURCES"] = "1"
-	if udp:
-		env["UDP_ENABLED"] = "1"
-	if record:
-		env["RECORD_ENABLED"] = "1"
-		env["RECORD_WIDTH"] = "1920"
-		env["RECORD_HEIGHT"] = "1080"
-		env["FRAME_WIDTH"] = "1920"
-		env["FRAME_HEIGHT"] = "1080"
-		env["JPEG_QUALITY"] = "90"
-		if record_dir:
-			env["RECORD_OUTPUT_DIR"] = record_dir
+	if max_quality:
+		env["MAX_QUALITY_MODE"] = "1"
 	if https:
 		if crt_file and key_file:
 			env["SSL_CRT_FILE"] = crt_file
@@ -79,9 +69,7 @@ def main():
 	parser.add_argument("--cpu-intensive", action="store_true", help="Modo CPU intensivo (más procesamiento)")
 	parser.add_argument("--long-range", action="store_true", help="Modo alcance largo 80m (640x360, 15fps)")
 	parser.add_argument("--dynamic", action="store_true", help="Recursos dinámicos (CPU/RAM target 70%%)")
-	parser.add_argument("--udp", action="store_true", help="Transmisión UDP del video")
-	parser.add_argument("--record", action="store_true", help="Grabar video en alta calidad y máxima resolución")
-	parser.add_argument("--record-dir", type=str, help="Directorio de salida para grabaciones")
+	parser.add_argument("--max-quality", action="store_true", help="Máxima calidad (1920x1080, 60fps)")
 	args = parser.parse_args()
 
 	if args.listar:
@@ -97,7 +85,7 @@ def main():
 
 	# Sin argumentos: menú interactivo
 	tiene_params = (
-		args.long_range or args.record
+		args.long_range or args.max_quality
 		or (args.width is not None and args.height is not None and args.fps is not None and args.jpeg is not None)
 	)
 	if not args.listar and not tiene_params:
@@ -106,8 +94,8 @@ def main():
 
 	if args.long_range:
 		width, height, fps, jpeg = 640, 360, 15, 60
-	elif args.record:
-		width, height, fps, jpeg = 1920, 1080, 30, 90
+	elif args.max_quality:
+		width, height, fps, jpeg = 1920, 1080, 60, 95
 	else:
 		width, height, fps, jpeg = args.width, args.height, args.fps, args.jpeg
 
@@ -130,10 +118,8 @@ def main():
 		modos.append("alcance largo")
 	if args.dynamic:
 		modos.append("recursos dinámicos")
-	if args.udp:
-		modos.append("UDP")
-	if args.record:
-		modos.append("grabación alta calidad")
+	if args.max_quality:
+		modos.append("máxima calidad")
 
 	modo_str = ", ".join(modos) if modos else "HTTP"
 	print(f"Ejecutando: {width}x{height} @ {fps}fps, JPEG {jpeg}% ({modo_str})")
@@ -141,8 +127,7 @@ def main():
 	return ejecutar_servidor(
 		width, height, fps, jpeg, https, crt_file, key_file,
 		args.unstable, args.cpu_intensive, args.long_range,
-		args.dynamic, args.udp,
-		args.record, args.record_dir or "",
+		args.dynamic, args.max_quality,
 	)
 
 
