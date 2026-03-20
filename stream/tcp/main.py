@@ -71,8 +71,6 @@ def main():
 				data_logger.log_gps(gps_data["lat"], gps_data["lon"], gps_data["alt"], timestamp)
 			else:
 				gps_data = {"lat": 0.0, "lon": 0.0, "alt": 0.0, "quality": 0, "satellites": 0}
-
-			data_logger.write_frame(frame)
 			ret, jpeg_with_overlay = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
 			if ret:
 				jpeg_bytes = jpeg_with_overlay.tobytes()
