@@ -391,7 +391,7 @@ if __name__ == "__main__":
 		try:
 			from resource_limiter import ResourceLimiter
 		except ImportError:
-			from stream.resource_limiter import ResourceLimiter
+			from stream.tcp.resource_limiter import ResourceLimiter
 		initial_level = 7 if FPS_60_MODE else int(os.environ.get("RESOURCE_INITIAL_LEVEL", 4))
 		initial_level = max(0, min(initial_level, 8))
 		resource_limiter = ResourceLimiter(

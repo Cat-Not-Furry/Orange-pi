@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""
+Cliente TCP de Orange Pi: captura video, lee GPS, envía por TCP y guarda localmente.
+"""
+
+import logging
+import os
+import signal
+import sys
+import time
+
+import cv2
+import numpy as np
+
+from . import config
+from .data_logger import DataLogger
+from .gps_reader import GPSReader
+from .tcp_sender import TCPSender
+from .video_capture import VideoCapture
+
+logging.basicConfig(
+	level=logging.INFO,
+	format="%(asctime)s - %(levelname)s - %(message)s",
+	handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
+
+
+def overlay_gps(frame, gps_data):
+	"""Superpone texto GPS en el frame."""
+	if not gps_data:
+		return frame
+	text = f"Lat: {gps_data['lat']:.6f} Lon: {gps_data['lon']:.6f} Alt: {gps_data['alt']:.0f}m Sats: {gps_data['satellites']}"
+	cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+	return frame
+
+
+def main():
+	if not config.TCP_HOST:
+		logger.error("Define TCP_HOST con la IP de la laptop. Ej: TCP_HOST=192.168.1.50 python main.py")
+		sys.exit(1)
+
+	width, height, fps, jpeg_quality = config.get_video_params()
+	camera_index = int(os.environ.get("CAMERA_INDICES", "0").split(",")[0].strip())
+
+	video = VideoCapture(width, height, fps, jpeg_quality, camera_index)
+	gps = GPSReader(config.GPS_PORT, config.GPS_BAUD)
+	sender = TCPSender(config.TCP_HOST, config.TCP_PORT)
+	data_logger = DataLogger(width, height, float(fps))
+
+	signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
+	signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
+
+	gps.start()
+	video.start()
+
+	logger.info("Enviando video+GPS a %s:%d", config.TCP_HOST, config.TCP_PORT)
+
+	try:
+		while True:
+			item = video.get_frame(timeout=1.0)
+			if item is None:
+				continue
+			jpeg_bytes, timestamp, frame_number = item
+			frame = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+			if frame is None:
+				continue
+
+			gps_data = gps.get_data()
+			if gps_data:
+				frame = overlay_gps(frame, gps_data)
+				data_logger.log_gps(gps_data["lat"], gps_data["lon"], gps_data["alt"], timestamp)
+			else:
+				gps_data = {"lat": 0.0, "lon": 0.0, "alt": 0.0, "quality": 0, "satellites": 0}
+
+			data_logger.write_frame(frame)
+			ret, jpeg_with_overlay = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+			if ret:
+				jpeg_bytes = jpeg_with_overlay.tobytes()
+
+			ok = sender.send(
+				jpeg_bytes,
+				timestamp,
+				gps_data["lat"],
+				gps_data["lon"],
+				gps_data["alt"],
+				gps_data["quality"],
+				gps_data["satellites"],
+			)
+			if not ok:
+				time.sleep(5)
+	except KeyboardInterrupt:
+		pass
+	finally:
+		video.stop()
+		gps.stop()
+		sender.close()
+		data_logger.close()
+		logger.info("Cliente TCP detenido")
+
+
+if __name__ == "__main__":
+	main()
