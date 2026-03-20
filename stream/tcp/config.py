@@ -34,6 +34,10 @@ def get_video_params():
 	return MODE_NORMAL
 
 
+# Cámara (índices a probar: /dev/video0, video1, video2...)
+_cam_str = os.environ.get("CAMERA_INDICES", "0,1,2")
+CAMERA_INDICES = [int(x.strip()) for x in _cam_str.split(",") if x.strip()]
+
 # Datos de vuelo (Orange Pi)
 DATOS_VUELO_DIR = os.path.join(os.path.dirname(__file__), "datos_vuelo")
 SEGMENT_DURATION_SEC = 60

@@ -41,9 +41,8 @@ def main():
 		sys.exit(1)
 
 	width, height, fps, jpeg_quality = config.get_video_params()
-	camera_index = int(os.environ.get("CAMERA_INDICES", "0").split(",")[0].strip())
 
-	video = VideoCapture(width, height, fps, jpeg_quality, camera_index)
+	video = VideoCapture(width, height, fps, jpeg_quality, camera_indices=config.CAMERA_INDICES)
 	gps = GPSReader(config.GPS_PORT, config.GPS_BAUD)
 	sender = TCPSender(config.TCP_HOST, config.TCP_PORT)
 	data_logger = DataLogger(width, height, float(fps))

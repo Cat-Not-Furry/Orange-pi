@@ -13,19 +13,36 @@ import cv2
 logger = logging.getLogger(__name__)
 
 
+def _find_camera(indices):
+	"""Prueba varios índices hasta encontrar una cámara que entregue frames."""
+	for idx in indices:
+		logger.info("Probando cámara /dev/video%d...", idx)
+		cap = cv2.VideoCapture(idx)
+		if cap.isOpened():
+			ret, _ = cap.read()
+			if ret:
+				logger.info("Cámara encontrada en /dev/video%d", idx)
+				cap.release()
+				return idx
+			logger.warning("Índice %d se abrió pero no entrega frames", idx)
+		cap.release()
+	return None
+
+
 class VideoCapture:
 	"""Hilo que captura frames, comprime JPEG y los pone en cola."""
 
-	def __init__(self, width: int, height: int, fps: int, jpeg_quality: int, camera_index: int = 0, max_queue: int = 300):
+	def __init__(self, width: int, height: int, fps: int, jpeg_quality: int, camera_indices=None, max_queue: int = 300):
 		self.width = width
 		self.height = height
 		self.fps = fps
 		self.jpeg_quality = jpeg_quality
-		self.camera_index = camera_index
+		self.camera_indices = camera_indices if camera_indices is not None else [0, 1, 2]
 		self._queue = queue.Queue(maxsize=max_queue)
 		self._stop = threading.Event()
 		self._thread = None
 		self._cap = None
+		self._current_index = None
 
 	def get_frame(self, timeout: float = 0.5):
 		"""Obtiene (jpeg_bytes, timestamp, frame_number) o None si timeout."""
@@ -42,9 +59,18 @@ class VideoCapture:
 		while not self._stop.is_set():
 			try:
 				if self._cap is None or not self._cap.isOpened():
-					self._cap = cv2.VideoCapture(self.camera_index)
+					idx = self._current_index
+					if idx is None:
+						idx = _find_camera(self.camera_indices)
+						self._current_index = idx
+					if idx is None:
+						logger.warning("No se encontró cámara en %s. Reintentando...", self.camera_indices)
+						time.sleep(2)
+						continue
+					self._cap = cv2.VideoCapture(idx)
 					if not self._cap.isOpened():
-						logger.warning("Cámara no disponible, reintentando...")
+						self._current_index = None
+						logger.warning("Cámara /dev/video%d no disponible, buscando otra...", idx)
 						time.sleep(2)
 						continue
 					self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -55,7 +81,14 @@ class VideoCapture:
 
 				success, frame = self._cap.read()
 				if not success:
-					time.sleep(0.1)
+					self._current_index = None
+					if self._cap:
+						try:
+							self._cap.release()
+						except Exception:
+							pass
+						self._cap = None
+					time.sleep(0.5)
 					continue
 
 				now = time.perf_counter()
