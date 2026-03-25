@@ -2,15 +2,20 @@
 
 Anota aquí las métricas obtenidas al probar cada configuración.
 
-## Inicio rápido (menú)
+## Inicio rápido
 
 ```bash
-python menu.py
-# o
-python pruebas.py
+# Raíz del repo — Orange Pi: TCP/UDP hacia el host
+python orange_menu.py
+
+# Raíz del repo — laptop: receptor
+python host_menu.py
+
+# Pruebas HTTP u otras configs
+python stream/tcp/pruebas.py --listar
 ```
 
-Menú: Máxima calidad, Alcance largo, Red inestable, 60 FPS estable, Recursos dinámicos, HTTPS.
+HTTP (`web-cam.py`): variables de entorno (p. ej. `MAX_QUALITY_MODE`, `LONG_RANGE_MODE`, etc.).
 
 | Resolución | FPS | Calidad JPEG | FPS real (medido) | CPU % | Ancho de banda (aprox) | Latencia percibida |
 |------------|-----|--------------|-------------------|-------|------------------------|--------------------|

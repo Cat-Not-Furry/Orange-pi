@@ -62,5 +62,7 @@ recordings/
 stream/recordings/
 stream/tcp/datos_vuelo/
 stream/tcp/*.csv
+stream/udp/datos_vuelo/
+stream/udp/*.csv
 trayectoria_*.gpx
 respaldold.zip

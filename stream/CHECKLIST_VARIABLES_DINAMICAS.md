@@ -22,10 +22,9 @@ Incluye: host-only, 60 FPS estable, grabación máxima calidad.
 - [x] **RESOURCE_INITIAL_LEVEL**: Parámetro desde env.
 - [x] **FPS_60_MODE + DYNAMIC_RESOURCES**: initial_level=7 para arrancar en 60 fps.
 
-### 3. stream/menu.py
+### 3. Menús en la raíz del repo
 
-- [x] **Opción "60 FPS estable (1280x720)"**.
-- [x] **Modo grabación máxima**: RECORD_QUALITY=95, FPS=60, JPEG_QUALITY=95.
+- [x] **host_menu.py** / **orange_menu.py**: receptor en laptop y envío TCP/UDP desde Orange Pi con IP interactiva.
 
 ### 4. stream/.env.example
 
@@ -43,4 +42,4 @@ Incluye: host-only, 60 FPS estable, grabación máxima calidad.
 
 - [x] Ejecutar `python -m py_compile stream/web-cam.py`.
 - [x] Ejecutar `python -m py_compile stream/resource_limiter.py`.
-- [x] Ejecutar `python -m py_compile stream/menu.py`.
+- [x] Ejecutar `python -m py_compile orange_menu.py host_menu.py` (raíz del repo).

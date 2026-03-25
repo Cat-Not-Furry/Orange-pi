@@ -89,8 +89,14 @@ def main():
 		or (args.width is not None and args.height is not None and args.fps is not None and args.jpeg is not None)
 	)
 	if not args.listar and not tiene_params:
-		menu_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "menu.py")
-		return subprocess.run([sys.executable, menu_path]).returncode
+		print(
+			"Sin argumentos: el menú interactivo está en la raíz del repo.\n"
+			"  python orange_menu.py    (Orange Pi: TCP/UDP hacia el host)\n"
+			"  python host_menu.py      (laptop: receptor)\n"
+			"HTTP local: python stream/tcp/web-cam.py\n"
+			"Listar configs sugeridas: python pruebas.py --listar"
+		)
+		return 0
 
 	if args.long_range:
 		width, height, fps, jpeg = 640, 360, 15, 60

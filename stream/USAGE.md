@@ -2,31 +2,61 @@
 
 Streaming de video y GPS desde Orange Pi hacia laptop. El código está separado por dispositivo.
 
+## Menús en la raíz del repositorio
+
+Desde la raíz del proyecto (junto a `stream/`):
+
+**Host (laptop)** — qué protocolo escuchar:
+
+```bash
+python host_menu.py
+```
+
+**Orange Pi** — TCP o UDP e IP del host (interactivo):
+
+```bash
+python orange_menu.py
+```
+
+Empareja la misma columna en ambos menús (p. ej. host opción 1 “TCP máxima calidad” + orange: TCP → máxima calidad).
+
+1. **TCP — máxima calidad** ↔ `TCP_QUALITY_MAX=1`
+2. **TCP — calidad normal** ↔ `TCP_QUALITY_NORMAL=1`
+3. **UDP — máxima calidad** ↔ `UDP_QUALITY_MAX=1`
+4. **UDP — máxima transmisión (720p60)** ↔ `UDP_QUALITY_SUPERIOR=1`
+
+`host_menu.py` fija `PYTHONPATH` y lanza `stream/receiver.py`. `orange_menu.py` pide `TCP_HOST` / `UDP_HOST` y ejecuta `python -m stream.tcp.main` o `python -m stream.udp.main`.
+
 ## Separación por dispositivo
 
 | Ubicación | Dispositivo | Función |
 |-----------|-------------|---------|
 | **stream/** (raíz) | Laptop (host) | Recibe, muestra y graba video |
-| **stream/tcp/** | Orange Pi (tarjeta) | Captura, transmite video y GPS |
+| **stream/tcp/** | Orange Pi (tarjeta) | Captura y transmite por TCP (no graba video) |
+| **stream/udp/** | Orange Pi (tarjeta) | Captura y transmite por UDP fragmentado (no graba video) |
 
 ## Estructura de directorios
 
 ```
 stream/
 ├── recorder.py          # Laptop: recibe HTTP, graba
-├── receiver.py          # Laptop: recibe TCP, graba + GPX
+├── receiver.py          # Laptop: recibe TCP o UDP, graba + GPX
 ├── USAGE.md
 ├── .env.example
 └── tcp/
     ├── web-cam.py       # Orange Pi: servidor HTTP
-    ├── menu.py          # Orange Pi: menú de modos
     ├── main.py          # Orange Pi: cliente TCP
     ├── gps_reader.py
     ├── video_capture.py
     ├── tcp_sender.py
-    ├── data_logger.py
+    ├── data_logger.py   # Orange Pi: backup GPS en CSV (video se graba en laptop)
     ├── resource_limiter.py
     └── pruebas.py
+└── udp/
+    ├── main.py          # Orange Pi: cliente UDP
+    ├── udp_sender.py
+    ├── config.py
+    └── data_logger.py   # backup GPS en CSV
 ```
 
 ## Requisitos
@@ -56,10 +86,10 @@ Transmisión MJPEG por HTTP. Usa `web-cam.py` en Orange Pi y `recorder.py` en la
 
 ```bash
 cd stream/tcp
-python menu.py
-# o directamente:
 python web-cam.py
 ```
+
+Menú TCP/UDP con IP del host: desde la raíz del repo, `python orange_menu.py`.
 
 Por defecto: HTTP en puerto 5000, 1280x720, 30 fps, JPEG 80. Abre en navegador: `http://<IP_ORANGE_PI>:5000`
 
@@ -79,12 +109,14 @@ python recorder.py --url http://192.168.1.100:5000/video_feed --output-dir ./rec
 
 ## Modo TCP
 
-Transmisión por TCP con video + GPS. Usa `main.py` en Orange Pi y `receiver.py` en laptop.
+Transmisión por TCP con video + GPS. Orange Pi captura y envía; la laptop recibe, muestra, graba video y exporta GPX.
 
 ### En laptop (primero)
 
 ```bash
 cd stream
+python receiver.py tcp
+# o abreviado (tcp es el valor por defecto):
 python receiver.py
 ```
 
@@ -93,28 +125,55 @@ Espera en puerto 5555 (configurable). Muestra video en tiempo real, graba en seg
 ### En Orange Pi
 
 ```bash
-cd stream/tcp
-python menu.py
-# o desde la raíz del proyecto:
+# Desde la raíz del proyecto (recomendado):
+python orange_menu.py
+# o manual:
 TCP_HOST=192.168.1.50 python -m stream.tcp.main
 ```
 
 Configura `TCP_HOST` con la IP de la laptop (ej. 192.168.1.50).
 
-### Salidas
+### Salidas (en laptop)
 
 - **Video**: `stream/recordings/` (segmentos de 60s)
 - **GPX**: `trayectoria_YYYYMMDD_HHMMSS.gpx`
 
+En Orange Pi solo se guarda backup de GPS en `stream/tcp/datos_vuelo/gps_backup.csv` (opcional).
+
 ---
 
-## Menú unificado (Orange Pi)
+## Modo UDP
 
-En `stream/tcp/` ejecuta `python menu.py` para elegir:
+Transmisión fragmentada por UDP (baja latencia; puede perder paquetes en red inestable). Misma política: grabación y GPX en laptop.
 
-1. TCP Calidad máxima/superior (1920x1080 60fps o 1280x720 60fps)
-2. TCP Calidad normal (640x360 30fps)
-3. HTTP Máxima calidad (1920x1080 60fps)
+### En laptop (primero)
+
+```bash
+cd stream
+python receiver.py udp --port 5555
+```
+
+### En Orange Pi
+
+Desde la raíz del repositorio:
+
+```bash
+UDP_HOST=192.168.1.50 python -m stream.udp.main
+```
+
+Mismas resoluciones que TCP si activas `UDP_QUALITY_MAX`, `UDP_QUALITY_SUPERIOR` o `UDP_QUALITY_NORMAL` (solo uno a `1`). Sin ninguno, aplica el modo normal 640x360.
+
+### Salidas (en laptop)
+
+Igual que TCP: `recordings/` y `trayectoria_*.gpx`.
+
+Backup GPS en Orange Pi: `stream/udp/datos_vuelo/gps_backup.csv`.
+
+---
+
+## Menú Orange Pi (TCP / UDP)
+
+Desde la **raíz del repositorio**: `python orange_menu.py` (elige protocolo, IP del host y calidad). HTTP no está en ese menú; usa `web-cam.py` con variables de entorno (p. ej. `MAX_QUALITY_MODE=1`).
 
 ---
 
@@ -143,11 +202,25 @@ En `stream/tcp/` ejecuta `python menu.py` para elegir:
 | Variable | Default | Descripción |
 |----------|---------|-------------|
 | `TCP_HOST` | - | IP de la laptop (obligatorio) |
+| `CAMERA_INDICES` | 0,1,2 | Índices de cámara a probar (/dev/video0, video1, video2) |
 | `TCP_PORT` | 5555 | Puerto del receptor |
 | `GPS_PORT` | /dev/ttyS3 | Puerto serie del GPS |
 | `TCP_QUALITY_MAX` | 0 | 1 = 1920x1080 60fps JPEG95 |
 | `TCP_QUALITY_SUPERIOR` | 0 | 1 = 1280x720 60fps JPEG90 |
 | `TCP_QUALITY_NORMAL` | 0 | 1 = 640x360 30fps JPEG70 |
+
+### UDP (main.py vía `stream.udp.main`)
+
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `UDP_HOST` | - | IP de la laptop (obligatorio) |
+| `UDP_PORT` | 5555 | Puerto donde escucha `receiver.py udp` |
+| `UDP_PACKET_SIZE` | 1400 | Tamaño máximo del datagrama (payload + cabecera) |
+| `UDP_QUALITY_MAX` | 0 | 1 = 1920x1080 60fps JPEG95 |
+| `UDP_QUALITY_SUPERIOR` | 0 | 1 = 1280x720 60fps JPEG90 |
+| `UDP_QUALITY_NORMAL` | 0 | 1 = 640x360 30fps JPEG70 |
+
+`CAMERA_INDICES`, `GPS_PORT` y `GPS_BAUD` se comparten con TCP.
 
 ---
 
@@ -156,17 +229,19 @@ En `stream/tcp/` ejecuta `python menu.py` para elegir:
 ### Orange Pi
 
 ```bash
-cd stream/tcp
-python menu.py
-python web-cam.py
-python main.py
+python orange_menu.py
+cd stream/tcp && python web-cam.py
+# o: python -m stream.tcp.main | python -m stream.udp.main
 ```
 
 ### Laptop
 
 ```bash
+# Menús (raíz del repo): laptop → python host_menu.py | Orange Pi → python orange_menu.py
+
 cd stream
-python receiver.py
+python receiver.py tcp
+python receiver.py udp
 python recorder.py --host IP_ORANGE_PI --port 5000
 ```
 
