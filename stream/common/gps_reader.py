@@ -90,3 +90,7 @@ class GPSReader:
 				self._ser.close()
 			except Exception:
 				pass
+
+	def join(self, timeout=None):
+		if self._thread:
+			self._thread.join(timeout=timeout)

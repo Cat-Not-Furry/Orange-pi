@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Captura de video con OpenCV. Hilo que comprime JPEG y pone en cola.
+Captura de video con OpenCV: MJPEG, JPEG con calidad/luma/croma, rotación, cola.
 """
 
 import logging
@@ -9,6 +9,8 @@ import threading
 import time
 
 import cv2
+
+from stream.common import config
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +34,24 @@ def _find_camera(indices):
 class VideoCapture:
 	"""Hilo que captura frames, comprime JPEG y los pone en cola."""
 
-	def __init__(self, width: int, height: int, fps: int, jpeg_quality: int, camera_indices=None, max_queue: int = 300):
-		self.width = width
-		self.height = height
-		self.fps = fps
-		self.jpeg_quality = jpeg_quality
-		self.camera_indices = camera_indices if camera_indices is not None else [0, 1, 2]
-		self._queue = queue.Queue(maxsize=max_queue)
+	def __init__(self):
+		self.width = config.FRAME_WIDTH
+		self.height = config.FRAME_HEIGHT
+		self.fps = config.FPS
+		self.camera_indices = config.CAMERA_INDICES
+		self.max_queue = config.MAX_QUEUE_SIZE
+		self.rotate = config.ROTATE
+		self._encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), int(config.JPEG_QUALITY)]
+		if hasattr(cv2, "IMWRITE_JPEG_LUMA_QUALITY"):
+			self._encode_param.extend(
+				[
+					int(cv2.IMWRITE_JPEG_LUMA_QUALITY),
+					int(config.JPEG_LUMA_QUALITY),
+					int(cv2.IMWRITE_JPEG_CHROMA_QUALITY),
+					int(config.JPEG_CHROMA_QUALITY),
+				]
+			)
+		self._queue = queue.Queue(maxsize=self.max_queue)
 		self._stop = threading.Event()
 		self._thread = None
 		self._cap = None
@@ -50,6 +63,15 @@ class VideoCapture:
 			return self._queue.get(timeout=timeout)
 		except queue.Empty:
 			return None
+
+	def _rotate_frame(self, nd_array):
+		if self.rotate == 90:
+			return cv2.rotate(nd_array, cv2.ROTATE_90_CLOCKWISE)
+		if self.rotate == 180:
+			return cv2.rotate(nd_array, cv2.ROTATE_180)
+		if self.rotate == 270:
+			return cv2.rotate(nd_array, cv2.ROTATE_90_COUNTERCLOCKWISE)
+		return nd_array
 
 	def _run(self):
 		interval = 1.0 / self.fps if self.fps > 0 else 0.033
@@ -91,9 +113,12 @@ class VideoCapture:
 					time.sleep(0.5)
 					continue
 
+				if self.rotate:
+					frame = self._rotate_frame(frame)
+
 				now = time.perf_counter()
 				if now >= next_frame_time:
-					ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+					ret, buffer = cv2.imencode(".jpg", frame, self._encode_param)
 					if ret:
 						try:
 							self._queue.put_nowait((buffer.tobytes(), now, frame_number))
@@ -137,3 +162,7 @@ class VideoCapture:
 	def stop(self):
 		"""Detiene el hilo."""
 		self._stop.set()
+
+	def join(self, timeout=None):
+		if self._thread:
+			self._thread.join(timeout=timeout)

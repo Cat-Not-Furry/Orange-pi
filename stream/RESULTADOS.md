@@ -2,20 +2,23 @@
 
 Anota aquí las métricas obtenidas al probar cada configuración.
 
+El flujo principal del repo es **UDP imágenes** (`stream.img_udp`). Las secciones que citan `web-cam.py` aplican solo si mantienes por tu cuenta un servidor MJPEG HTTP (el antiguo `stream/tcp/web-cam.py` ya no está en el árbol).
+
 ## Inicio rápido
 
 ```bash
-# Raíz del repo — Orange Pi: TCP/UDP hacia el host
+# Raíz del repo — Orange Pi: UDP imágenes hacia el host
 python orange_menu.py
 
 # Raíz del repo — laptop: receptor
 python host_menu.py
 
-# Pruebas HTTP u otras configs
-python stream/tcp/pruebas.py --listar
+# Receptor / emisor directos (desde raíz del repo, PYTHONPATH=. )
+UDP_DEST_IP=192.168.1.50 python -m stream.img_udp.main
+cd stream && python img_udp/receiver.py
 ```
 
-HTTP (`web-cam.py`): variables de entorno (p. ej. `MAX_QUALITY_MODE`, `LONG_RANGE_MODE`, etc.).
+HTTP: usar `recorder.py` con un servidor MJPEG externo si lo tienes; variables típicas en `.env.example`.
 
 | Resolución | FPS | Calidad JPEG | FPS real (medido) | CPU % | Ancho de banda (aprox) | Latencia percibida |
 |------------|-----|--------------|-------------------|-------|------------------------|--------------------|

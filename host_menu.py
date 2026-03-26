@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Menú del host (laptop): qué protocolo escuchar — TCP o UDP y el perfil de calidad en Orange Pi.
+Menú del host (laptop): receptor UDP imágenes (JPEG + GPS).
 
 Desde la raíz del repo: python host_menu.py
 
@@ -13,28 +13,24 @@ import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 STREAM_DIR = os.path.join(PROJECT_ROOT, "stream")
-RECEIVER = os.path.join(STREAM_DIR, "receiver.py")
+RECORDINGS_BASE = os.path.join(PROJECT_ROOT, "recordings")
+RECEIVER = os.path.join(STREAM_DIR, "img_udp", "receiver.py")
 
 MODOS = [
 	{
-		"nombre": "TCP — máxima calidad (entrega confiable de paquetes)",
-		"protocol": "tcp",
-		"hint_pi": "orange_menu.py → TCP → máxima calidad",
+		"nombre": "UDP imágenes — máxima calidad (1080p60, perfil emisor)",
+		"hint_pi": "orange_menu.py → máxima calidad",
+		"env": {},
 	},
 	{
-		"nombre": "TCP — calidad normal (entrega confiable de paquetes)",
-		"protocol": "tcp",
-		"hint_pi": "orange_menu.py → TCP → calidad normal",
+		"nombre": "UDP imágenes — calidad alta (720p60, perfil emisor)",
+		"hint_pi": "orange_menu.py → calidad alta",
+		"env": {},
 	},
 	{
-		"nombre": "UDP — máxima calidad (baja latencia)",
-		"protocol": "udp",
-		"hint_pi": "orange_menu.py → UDP → máxima calidad",
-	},
-	{
-		"nombre": "UDP — máxima transmisión / fluido (baja latencia, 720p60)",
-		"protocol": "udp",
-		"hint_pi": "orange_menu.py → UDP → máxima transmisión",
+		"nombre": "UDP imágenes — calidad por defecto (resolución en .env / config)",
+		"hint_pi": "orange_menu.py → predeterminado",
+		"env": {},
 	},
 ]
 
@@ -48,25 +44,23 @@ def _mostrar_emparejamiento(modo: dict) -> None:
 	print("─" * 60 + "\n")
 
 
-def _lanzar_receptor(protocol: str) -> int:
+def _lanzar_receptor(modo: dict) -> int:
 	env = os.environ.copy()
 	prev = env.get("PYTHONPATH", "")
 	env["PYTHONPATH"] = PROJECT_ROOT + (os.pathsep + prev if prev else "")
+	env.update(modo.get("env") or {})
 	cmd = [
 		sys.executable,
 		RECEIVER,
-		protocol,
-		"--output-dir",
-		os.path.join(STREAM_DIR, "recordings"),
-		"--gpx-dir",
-		STREAM_DIR,
+		"--recordings-base",
+		RECORDINGS_BASE,
 	]
 	print(f"\nEjecutando: {' '.join(cmd)}\n")
 	return subprocess.run(cmd, cwd=STREAM_DIR, env=env).returncode
 
 
 def main() -> int:
-	print("\n=== Host (laptop) — receptor de stream ===\n")
+	print("\n=== Host (laptop) — receptor UDP imágenes ===\n")
 	for i, modo in enumerate(MODOS, 1):
 		print(f"  {i}. {modo['nombre']}")
 	print("  0. Salir\n")
@@ -84,11 +78,11 @@ def main() -> int:
 		print("Opción no válida.")
 		return 1
 
-	modo = MODOS[opcion - 1]
+	modo = dict(MODOS[opcion - 1])
 	print(f"\nModo: {modo['nombre']}")
 	_mostrar_emparejamiento(modo)
 	input("Pulsa Enter para iniciar el receptor en esta laptop… ")
-	return _lanzar_receptor(modo["protocol"])
+	return _lanzar_receptor(modo)
 
 
 if __name__ == "__main__":

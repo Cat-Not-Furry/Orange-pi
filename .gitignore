@@ -57,12 +57,12 @@ indice_agente.md
 reglas_rapidas.md
 stream/RESULTADOS.md
 
-# Stream - grabaciones y datos de vuelo
+# Stream - grabaciones y datos de vuelo (sesiones: <repo>/recordings/<session>/)
 recordings/
 stream/recordings/
-stream/tcp/datos_vuelo/
-stream/tcp/*.csv
-stream/udp/datos_vuelo/
-stream/udp/*.csv
+stream/datos_vuelo/
+stream/datos_vuelo/**/*.jpg
+stream/datos_vuelo/**/*.gps
+stream/**/*.csv
 trayectoria_*.gpx
 respaldold.zip

@@ -1,265 +1,148 @@
 # Stream: instrucciones de uso
 
-Streaming de video y GPS desde Orange Pi hacia laptop. El código está separado por dispositivo.
+Envío de **imágenes JPEG** por **UDP** (fragmentado) con GPS desde Orange Pi hacia laptop. **No hay grabación de vídeo en vivo** (`VideoWriter` / MP4 en el receptor): solo **JPEG sueltos** en disco para análisis (Pi) y para **montar vídeo offline** después (laptop).
+
+La **sesión** (nombre de subcarpeta) la genera **la Orange Pi** al arrancar el emisor; va en **cada datagrama** para que la laptop cree la misma ruta sin depender del orden de arranque.
 
 ## Menús en la raíz del repositorio
 
-Desde la raíz del proyecto (junto a `stream/`):
-
-**Host (laptop)** — qué protocolo escuchar:
+**Host (laptop)** — receptor UDP:
 
 ```bash
 python host_menu.py
 ```
 
-**Orange Pi** — TCP o UDP e IP del host (interactivo):
+**Orange Pi** — emisor e IP del host:
 
 ```bash
 python orange_menu.py
 ```
 
-Empareja la misma columna en ambos menús (p. ej. host opción 1 “TCP máxima calidad” + orange: TCP → máxima calidad).
+`host_menu.py` fija `PYTHONPATH` y lanza `stream/img_udp/receiver.py` con `--recordings-base` = `<repo>/recordings`. `orange_menu.py` define `UDP_DEST_IP` y ejecuta `python -m stream.img_udp.main`.
 
-1. **TCP — máxima calidad** ↔ `TCP_QUALITY_MAX=1`
-2. **TCP — calidad normal** ↔ `TCP_QUALITY_NORMAL=1`
-3. **UDP — máxima calidad** ↔ `UDP_QUALITY_MAX=1`
-4. **UDP — máxima transmisión (720p60)** ↔ `UDP_QUALITY_SUPERIOR=1`
+## Dónde se guardan los datos
 
-`host_menu.py` fija `PYTHONPATH` y lanza `stream/receiver.py`. `orange_menu.py` pide `TCP_HOST` / `UDP_HOST` y ejecuta `python -m stream.tcp.main` o `python -m stream.udp.main`.
+Raíz del repo: [PROJECT_ROOT]/`recordings`/`<session_id>`/
+
+| Subcarpeta | Dispositivo | Contenido |
+|------------|-------------|-----------|
+| `analysis/` | Orange Pi | JPEG y `.gps` en **máxima calidad de captura** (recomendado `ORANGE_ANALYSIS_MAX=1` o subir `JPEG_QUALITY`) |
+| `video_source/` | Laptop | JPEG re-codificados con `HOST_SAVE_JPEG_QUALITY` (menor tamaño, adecuados para timeline de vídeo) |
+
+`session_id` por defecto: fecha-hora local `%Y-%m-%d_%H-%M-%S`. Override: variable `SESSION_ID` (máx. 31 caracteres UTF-8 en cabecera UDP).
 
 ## Separación por dispositivo
 
 | Ubicación | Dispositivo | Función |
-|-----------|-------------|---------|
-| **stream/** (raíz) | Laptop (host) | Recibe, muestra y graba video |
-| **stream/tcp/** | Orange Pi (tarjeta) | Captura y transmite por TCP (no graba video) |
-| **stream/udp/** | Orange Pi (tarjeta) | Captura y transmite por UDP fragmentado (no graba video) |
+|-----------|-------------|-----------|
+| `stream/img_udp/receiver.py` | Laptop | Reensambla JPEG, vista previa, guarda en `video_source/` |
+| `stream/common/` | Ambos | `config`, `gps_reader`, `video_capture`, `resource_limiter` |
+| `stream/img_udp/` | Orange Pi | `main.py`, `sender.py` |
 
 ## Estructura de directorios
 
-```
-stream/
-├── recorder.py          # Laptop: recibe HTTP, graba
-├── receiver.py          # Laptop: recibe TCP o UDP, graba + GPX
-├── USAGE.md
-├── .env.example
-└── tcp/
-    ├── web-cam.py       # Orange Pi: servidor HTTP
-    ├── main.py          # Orange Pi: cliente TCP
-    ├── gps_reader.py
-    ├── video_capture.py
-    ├── tcp_sender.py
-    ├── data_logger.py   # Orange Pi: backup GPS en CSV (video se graba en laptop)
-    ├── resource_limiter.py
-    └── pruebas.py
-└── udp/
-    ├── main.py          # Orange Pi: cliente UDP
-    ├── udp_sender.py
-    ├── config.py
-    └── data_logger.py   # backup GPS en CSV
+```text
+<repo>/
+├── recordings/             # creado por sesión; ignorado por git
+│   └── <session_id>/
+│       ├── analysis/       # sólo en Orange Pi
+│       └── video_source/   # sólo en laptop
+├── stream/
+│   ├── common/
+│   ├── img_udp/
+│   ├── datos_vuelo/        # legado opcional
+│   ├── recorder.py         # HTTP/MJPEG opcional
+│   ├── receiver.py         # delega en img_udp/receiver.py
+│   ├── USAGE.md
+│   └── .env.example
+├── host_menu.py
+└── orange_menu.py
 ```
 
 ## Requisitos
 
 - Python 3
-- Dependencias: `opencv-python`, `psutil`, `flask`, `pyopenssl` (solo HTTPS adhoc), `pynmea2`, `pyserial`
+- `opencv-python`, `numpy`, `psutil`, `pynmea2`, `pyserial` en la Pi si usas GPS
 
 ```bash
-pip install -r ../requirements.txt
+pip install -r requirements.txt
 ```
 
-## Requisitos de red
+## Modo UDP imágenes (principal)
 
-El proyecto **no requiere conexión a internet**. Solo necesita que el dispositivo (Orange Pi) y la laptop estén en la misma red local:
+### En la laptop
 
+Desde la raíz del repo (para imports `stream.*`):
+
+```bash
+PYTHONPATH=. python -m stream.img_udp.receiver
 ```
-[Laptop] <--WiFi/Ethernet--> [Router/AP] <--WiFi/Ethernet--> [Orange Pi]
+
+O desde `stream/`:
+
+```bash
+cd stream
+PYTHONPATH=.. python img_udp/receiver.py --recordings-base ../recordings
 ```
 
----
+`host_menu.py` ya pasa `--recordings-base` apuntando a `<repo>/recordings`.
 
-## Modo HTTP
+Opciones útiles:
 
-Transmisión MJPEG por HTTP. Usa `web-cam.py` en Orange Pi y `recorder.py` en laptop.
+- `--recordings-base`: raíz (default: `RECORDINGS_DIR` en config = `<repo>/recordings`)
+- `--no-save-frames`: solo ventana OpenCV
+- `--host-jpeg-quality N`: calidad al escribir en `video_source/`
+- `--port`, `--bind`
+- Tecla `q` cierra la ventana
 
 ### En Orange Pi
 
 ```bash
-cd stream/tcp
-python web-cam.py
+# Desde la raíz del repo:
+UDP_DEST_IP=192.168.1.50 python -m stream.img_udp.main
+
+# Sesión explícita:
+SESSION_ID=vuelo_001 UDP_DEST_IP=192.168.1.50 python -m stream.img_udp.main
+
+# Máxima calidad JPEG para carpeta analysis/ (también es lo que sale por UDP):
+ORANGE_ANALYSIS_MAX=1 UDP_DEST_IP=... python -m stream.img_udp.main
 ```
 
-Menú TCP/UDP con IP del host: desde la raíz del repo, `python orange_menu.py`.
+## Variables de entorno (resumen)
 
-Por defecto: HTTP en puerto 5000, 1280x720, 30 fps, JPEG 80. Abre en navegador: `http://<IP_ORANGE_PI>:5000`
-
-### En laptop
-
-```bash
-cd stream
-python recorder.py --host IP_ORANGE_PI --port 5000
-python recorder.py --url http://192.168.1.100:5000/video_feed --output-dir ./recordings
-```
-
-- Reintenta la conexión hasta que el Orange Pi esté disponible
-- Guarda en `./recordings/recording_YYYYMMDD_HHMMSS.mp4` (o `.avi`)
-- Ctrl+C para detener
-
----
-
-## Modo TCP
-
-Transmisión por TCP con video + GPS. Orange Pi captura y envía; la laptop recibe, muestra, graba video y exporta GPX.
-
-### En laptop (primero)
-
-```bash
-cd stream
-python receiver.py tcp
-# o abreviado (tcp es el valor por defecto):
-python receiver.py
-```
-
-Espera en puerto 5555 (configurable). Muestra video en tiempo real, graba en segmentos y exporta GPX.
-
-### En Orange Pi
-
-```bash
-# Desde la raíz del proyecto (recomendado):
-python orange_menu.py
-# o manual:
-TCP_HOST=192.168.1.50 python -m stream.tcp.main
-```
-
-Configura `TCP_HOST` con la IP de la laptop (ej. 192.168.1.50).
-
-### Salidas (en laptop)
-
-- **Video**: `stream/recordings/` (segmentos de 60s)
-- **GPX**: `trayectoria_YYYYMMDD_HHMMSS.gpx`
-
-En Orange Pi solo se guarda backup de GPS en `stream/tcp/datos_vuelo/gps_backup.csv` (opcional).
-
----
-
-## Modo UDP
-
-Transmisión fragmentada por UDP (baja latencia; puede perder paquetes en red inestable). Misma política: grabación y GPX en laptop.
-
-### En laptop (primero)
-
-```bash
-cd stream
-python receiver.py udp --port 5555
-```
-
-### En Orange Pi
-
-Desde la raíz del repositorio:
-
-```bash
-UDP_HOST=192.168.1.50 python -m stream.udp.main
-```
-
-Mismas resoluciones que TCP si activas `UDP_QUALITY_MAX`, `UDP_QUALITY_SUPERIOR` o `UDP_QUALITY_NORMAL` (solo uno a `1`). Sin ninguno, aplica el modo normal 640x360.
-
-### Salidas (en laptop)
-
-Igual que TCP: `recordings/` y `trayectoria_*.gpx`.
-
-Backup GPS en Orange Pi: `stream/udp/datos_vuelo/gps_backup.csv`.
-
----
-
-## Menú Orange Pi (TCP / UDP)
-
-Desde la **raíz del repositorio**: `python orange_menu.py` (elige protocolo, IP del host y calidad). HTTP no está en ese menú; usa `web-cam.py` con variables de entorno (p. ej. `MAX_QUALITY_MODE=1`).
-
----
-
-## Variables de entorno
-
-### HTTP (web-cam.py)
+Cabecera UDP: `IMG_UDP_HEADER_FORMAT` en `stream/common/config.py` (incluye `session_id` 32 bytes + metadatos + payload).
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
-| `CAMERA_INDICES` | 0,1,2 | Índices de cámara a probar |
-| `LOG_FILE` | stream.log | Archivo de log |
-| `FRAME_WIDTH` | 1280 | Ancho de frame |
-| `FRAME_HEIGHT` | 720 | Alto de frame |
-| `FPS` | 30 | Frames por segundo |
-| `JPEG_QUALITY` | 80 | Calidad JPEG (0-100) |
-| `HTTPS_PORT` | 5000 | Puerto del servidor |
-| `MAX_QUALITY_MODE` | 0 | 1 = 1920x1080, 60fps, JPEG 95 |
-| `LONG_RANGE_MODE` | 0 | 1 = 640x360, 15fps (alcance 80m) |
-| `UNSTABLE_NETWORK_MODE` | 0 | 1 = menor resolución para red inestable |
-| `DYNAMIC_RESOURCES` | 0 | 1 = ajuste dinámico CPU/RAM ~70% |
-| `SSL_CRT_FILE`, `SSL_KEY_FILE` | - | Certificados HTTPS |
-| `SSL_ADHOC` | 0 | 1 = HTTPS con certificado autofirmado |
+| `SESSION_ID` | (fecha hora) | Nombre de sesión (Pi); máx. 31 chars |
+| `RECORDINGS_DIR` | `<repo>/recordings` | Raíz de sesiones en ambos equipos si misma convención |
+| `ANALYSIS_SUBDIR` | analysis | Subcarpeta en Pi |
+| `VIDEO_SOURCE_SUBDIR` | video_source | Subcarpeta en laptop |
+| `SAVE_LOCAL_ANALYSIS` | 1 | Guardar JPEG en Pi bajo `recordings/<session>/analysis/` |
+| `SAVE_HOST_FRAMES` | 1 | Guardar JPEG en laptop (`--no-save-frames` lo desactiva) |
+| `HOST_SAVE_JPEG_QUALITY` | 75 | Calidad al re-encode en laptop |
+| `ORANGE_ANALYSIS_MAX` | 0 | 1 → sube `ANALYSIS_JPEG_QUALITY` (default 98) para captura |
+| `ANALYSIS_JPEG_QUALITY` | 98 | Si `ORANGE_ANALYSIS_MAX=1` |
+| `UDP_DEST_IP` / `UDP_HOST` | (vacío) | IP laptop; obligatorio en emisor |
+| `UDP_PORT` | 5555 | Emisor y receptor |
+| `UDP_PACKET_SIZE` | 1400 | MTU lógica |
+| `UDP_RETRANSMIT` | 0 | Copias por fragmento (mínimo 1 envío real) |
+| `IMG_UDP_QUALITY_MAX` / `SUPERIOR` | 0 | Perfiles resolución/FPS |
 
-### TCP (main.py)
+Ver `stream/.env.example`.
 
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `TCP_HOST` | - | IP de la laptop (obligatorio) |
-| `CAMERA_INDICES` | 0,1,2 | Índices de cámara a probar (/dev/video0, video1, video2) |
-| `TCP_PORT` | 5555 | Puerto del receptor |
-| `GPS_PORT` | /dev/ttyS3 | Puerto serie del GPS |
-| `TCP_QUALITY_MAX` | 0 | 1 = 1920x1080 60fps JPEG95 |
-| `TCP_QUALITY_SUPERIOR` | 0 | 1 = 1280x720 60fps JPEG90 |
-| `TCP_QUALITY_NORMAL` | 0 | 1 = 640x360 30fps JPEG70 |
+## Modo HTTP (opcional)
 
-### UDP (main.py vía `stream.udp.main`)
-
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `UDP_HOST` | - | IP de la laptop (obligatorio) |
-| `UDP_PORT` | 5555 | Puerto donde escucha `receiver.py udp` |
-| `UDP_PACKET_SIZE` | 1400 | Tamaño máximo del datagrama (payload + cabecera) |
-| `UDP_QUALITY_MAX` | 0 | 1 = 1920x1080 60fps JPEG95 |
-| `UDP_QUALITY_SUPERIOR` | 0 | 1 = 1280x720 60fps JPEG90 |
-| `UDP_QUALITY_NORMAL` | 0 | 1 = 640x360 30fps JPEG70 |
-
-`CAMERA_INDICES`, `GPS_PORT` y `GPS_BAUD` se comparten con TCP.
+`recorder.py` para un servidor MJPEG externo; no está en `orange_menu.py`.
 
 ---
 
 ## Comandos rápidos
 
-### Orange Pi
+**Orange Pi:** `python orange_menu.py` o `UDP_DEST_IP=... python -m stream.img_udp.main`
 
-```bash
-python orange_menu.py
-cd stream/tcp && python web-cam.py
-# o: python -m stream.tcp.main | python -m stream.udp.main
-```
-
-### Laptop
-
-```bash
-# Menús (raíz del repo): laptop → python host_menu.py | Orange Pi → python orange_menu.py
-
-cd stream
-python receiver.py tcp
-python receiver.py udp
-python recorder.py --host IP_ORANGE_PI --port 5000
-```
-
----
-
-## Endpoints HTTP (web-cam)
-
-| Ruta | Descripción |
-|------|-------------|
-| `/` | Página con stream y estadísticas |
-| `/video_feed` | Stream MJPEG (para `<img src="">` o VLC) |
-| `/stats` | JSON con FPS, CPU, memoria, ancho de banda |
-
-## Logs
-
-- Consola: métricas cada 10 segundos
-- Archivo: `stream.log` por defecto (configurable con `LOG_FILE`)
+**Laptop:** `python host_menu.py` o `PYTHONPATH=. python -m stream.img_udp.receiver`
 
 ## Detener
 
-Ctrl+C para detener el servidor y liberar la cámara.
+Ctrl+C en emisor o receptor; en la ventana OpenCV, `q`.
