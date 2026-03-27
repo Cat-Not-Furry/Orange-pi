@@ -30,6 +30,8 @@ JPEG_LUMA_QUALITY = int(os.environ.get("JPEG_LUMA_QUALITY", "24"))
 JPEG_CHROMA_QUALITY = int(os.environ.get("JPEG_CHROMA_QUALITY", "30"))
 ROTATE = int(os.environ.get("ROTATE", "0"))
 MAX_QUEUE_SIZE = int(os.environ.get("MAX_QUEUE_SIZE", "300"))
+# 1 = pedir MJPEG al driver USB (no es grabación a archivo); 0 = formato por defecto (p. ej. YUYV)
+CAMERA_USE_MJPEG = os.environ.get("CAMERA_USE_MJPEG", "1") == "1"
 
 # Perfiles rápidos (opcional; solo uno activo)
 if os.environ.get("IMG_UDP_QUALITY_MAX", "0") == "1":
@@ -55,6 +57,12 @@ UDP_DEST_IP = (
 )
 UDP_PACKET_SIZE = int(os.environ.get("UDP_PACKET_SIZE", "1400"))
 UDP_RETRANSMIT = int(os.environ.get("UDP_RETRANSMIT", "0"))
+
+# Cola emisor Pi: desacoplar envío UDP (y disco) del ritmo de captura
+IMG_UDP_SEND_QUEUE_SIZE = max(1, int(os.environ.get("IMG_UDP_SEND_QUEUE_SIZE", "4")))
+IMG_UDP_QUEUE_DROP_OLDEST = os.environ.get("IMG_UDP_QUEUE_DROP_OLDEST", "1") == "1"
+DISK_SAVE_QUEUE_SIZE = max(1, int(os.environ.get("DISK_SAVE_QUEUE_SIZE", "8")))
+SAVE_LOCAL_EVERY_N = max(1, int(os.environ.get("SAVE_LOCAL_EVERY_N", "1")))
 
 # Cabecera: seq(I) total(H) idx(H) session(32s) ts(d) lat(d) lon(d) alt(f) qual(B)
 IMG_UDP_SESSION_BYTES = 32

@@ -2,6 +2,14 @@
 
 Envío de **imágenes JPEG** por **UDP** (fragmentado) con GPS desde Orange Pi hacia laptop. **No hay grabación de vídeo en vivo** (`VideoWriter` / MP4 en el receptor): solo **JPEG sueltos** en disco para análisis (Pi) y para **montar vídeo offline** después (laptop).
 
+### La Pi no graba contenedor de vídeo en modo `img_udp`
+
+El emisor solo escribe **`.jpg`** y metadatos **`.gps`** bajo `recordings/<session>/analysis/`. **No** usa `cv2.VideoWriter` ni genera `.mp4`/`.avi` en ese flujo.
+
+En muchas cámaras USB, OpenCV pide el códec **MJPG** como formato de **salida del dispositivo** (`CAP_PROP_FOURCC`). Eso es el stream comprimido que entrega el driver; **no** es un archivo de vídeo grabado en disco. Si ves `.mp4` en algún sitio, suele ser **otro programa** (por ejemplo `stream/recorder.py` en la laptop o una herramienta externa), no el emisor UDP de la Pi.
+
+**Lag y disco:** con `SAVE_LOCAL_ANALYSIS=1`, cada frame puede encolar escritura de archivos. El emisor usa **colas e hilos** para no bloquear la captura con el envío UDP; aun así, mucho I/O en disco puede subir uso de CPU/memoria y llenar colas (ver contadores de descarte al detener). Para **solo transmitir**, usa `SAVE_LOCAL_ANALYSIS=0`. Para reducir escrituras manteniendo UDP completo, sube `SAVE_LOCAL_EVERY_N` (guarda 1 de cada N frames en disco).
+
 La **sesión** (nombre de subcarpeta) la genera **la Orange Pi** al arrancar el emisor; va en **cada datagrama** para que la laptop cree la misma ruta sin depender del orden de arranque.
 
 ## Menús en la raíz del repositorio
@@ -128,6 +136,11 @@ Cabecera UDP: `IMG_UDP_HEADER_FORMAT` en `stream/common/config.py` (incluye `ses
 | `UDP_PACKET_SIZE` | 1400 | MTU lógica |
 | `UDP_RETRANSMIT` | 0 | Copias por fragmento (mínimo 1 envío real) |
 | `IMG_UDP_QUALITY_MAX` / `SUPERIOR` | 0 | Perfiles resolución/FPS |
+| `CAMERA_USE_MJPEG` | 1 | `1` = pedir MJPEG al driver USB; `0` = formato por defecto (p. ej. YUYV): puede cambiar CPU y ancho de banda USB |
+| `IMG_UDP_SEND_QUEUE_SIZE` | 4 | Frames máx. en cola antes de envío UDP (mín. 1) |
+| `IMG_UDP_QUEUE_DROP_OLDEST` | 1 | `1` = si la cola UDP (o disco) está llena, descarta el más antiguo; `0` = descarta el entrante |
+| `DISK_SAVE_QUEUE_SIZE` | 8 | Frames máx. pendientes de escritura en `analysis/` |
+| `SAVE_LOCAL_EVERY_N` | 1 | Guardar en disco solo 1 de cada N frames (UDP sigue con todos) |
 
 Ver `stream/.env.example`.
 

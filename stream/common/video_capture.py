@@ -95,7 +95,8 @@ class VideoCapture:
 						logger.warning("Cámara /dev/video%d no disponible, buscando otra...", idx)
 						time.sleep(2)
 						continue
-					self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+					if config.CAMERA_USE_MJPEG:
+						self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 					self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
 					self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
 					self._cap.set(cv2.CAP_PROP_FPS, self.fps)
